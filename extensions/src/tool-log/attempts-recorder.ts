@@ -1,54 +1,24 @@
 /**
  * Bridges Pi's tool_call/tool_execution_end events to real `attempts` rows
  * in the Layer 2 state DB (Architecture §4.3), alongside the raw JSONL
- * capture in jsonl-log.ts. This is Session 2's structured, queryable half
- * of the audit trail; the JSONL file remains the crash-safe raw half.
+ * capture in index.ts. This is Session 2's structured, queryable half of
+ * the audit trail; the JSONL file remains the crash-safe raw half.
  *
- * Deliberately simple for Session 2: one target + one root recon node are
- * created fresh per Pi session, with no reuse or per-service branching.
- * Growing a real investigation tree from decisions is Session 3's feedback
- * loop, not this module's job.
+ * Engagement bootstrap (opening the DB, creating the target + root node)
+ * lives in ../state/engagement.ts, shared with the recon extension so both
+ * operate against the same target/tree rather than each creating their own.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import { attackTagForCommand, parseBaseTool } from "./attack-mapping.js";
-import type { AttemptsRepo } from "../state/attempts-repo.js";
-import { createAttemptsRepo } from "../state/attempts-repo.js";
-import { openStateDb } from "../state/db.js";
-import { createNodesRepo } from "../state/nodes-repo.js";
-import { createTargetsRepo } from "../state/targets-repo.js";
+import { parseBaseTool } from "../shared/bash-command.js";
+import { getEngagement, startEngagement } from "../state/engagement.js";
+import { attackTagForCommand } from "./attack-mapping.js";
+
+export { startEngagement };
 
 const EVIDENCE_DIR = "evidence/attempts";
 
-interface Engagement {
-	db: DatabaseSync;
-	targetId: number;
-	rootNodeId: number;
-	attemptsRepo: AttemptsRepo;
-}
-
-let engagement: Engagement | undefined;
 const pendingAttemptIds = new Map<string, number>();
-
-export function startEngagement(cwd: string): void {
-	const db = openStateDb(cwd);
-	const targetsRepo = createTargetsRepo(db);
-	const nodesRepo = createNodesRepo(db);
-	const attemptsRepo = createAttemptsRepo(db);
-
-	const target = targetsRepo.create({
-		label: process.env["PLUTO_TARGET_LABEL"] ?? "ad-hoc",
-		host: process.env["PLUTO_TARGET_HOST"] ?? "localhost",
-	});
-	const rootNode = nodesRepo.create({
-		targetId: target.id,
-		nodeType: "recon",
-		label: "session root",
-	});
-
-	engagement = { db, targetId: target.id, rootNodeId: rootNode.id, attemptsRepo };
-}
 
 function toolAndCommandFor(toolName: string, input: unknown): { tool: string; command: string } {
 	if (toolName === "bash" && input && typeof input === "object" && "command" in input) {
@@ -59,13 +29,14 @@ function toolAndCommandFor(toolName: string, input: unknown): { tool: string; co
 }
 
 export function recordAttemptStart(toolCallId: string, toolName: string, input: unknown): void {
+	const engagement = getEngagement();
 	if (!engagement) {
 		console.error("[pluto/tool-log] no engagement DB open; skipping attempts row (JSONL log still covers this call)");
 		return;
 	}
 	const { tool, command } = toolAndCommandFor(toolName, input);
 	const tag = toolName === "bash" ? attackTagForCommand(command) : undefined;
-	const attempt = engagement.attemptsRepo.start({
+	const attempt = engagement.repos.attempts.start({
 		targetId: engagement.targetId,
 		nodeId: engagement.rootNodeId,
 		tool,
@@ -82,6 +53,7 @@ export async function recordAttemptEnd(
 	isError: boolean,
 	result: unknown,
 ): Promise<void> {
+	const engagement = getEngagement();
 	if (!engagement) {
 		return;
 	}
@@ -97,7 +69,7 @@ export async function recordAttemptEnd(
 	} catch (error) {
 		console.error("[pluto/tool-log] failed to write output evidence for attempt", attemptId, error);
 	}
-	engagement.attemptsRepo.finish(attemptId, {
+	engagement.repos.attempts.finish(attemptId, {
 		outcome: isError ? "failure" : "success",
 		outputRef,
 	});

@@ -3,11 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Pluto's custom Pi extension layer (vision pipeline, agent-delegation, red-lines hook, tool-call logging). Session 0: scaffolding only.",
+  "description": "Pluto's custom Pi extension layer (vision pipeline, agent-delegation, red-lines hook, tool-call logging, Layer 2 state, recon feedback loop).",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "hello": "npm run build && node dist/hello.js",
     "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "typebox": "1.3.27"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

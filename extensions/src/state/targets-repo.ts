@@ -11,6 +11,10 @@ export interface CreateTargetInput {
 export interface TargetsRepo {
 	create(input: CreateTargetInput): TargetRow;
 	getById(id: number): TargetRow | undefined;
+	/** Most recent target with this label, if one exists. `label` is the
+	 * natural reuse key for Layer 2's persistent per-target memory (targets
+	 * are meant to survive across Pi invocations, not just one process). */
+	findByLabel(label: string): TargetRow | undefined;
 }
 
 export function createTargetsRepo(db: DatabaseSync): TargetsRepo {
@@ -18,6 +22,7 @@ export function createTargetsRepo(db: DatabaseSync): TargetsRepo {
 		"INSERT INTO targets (label, host, scope_notes, phase) VALUES (?, ?, ?, ?)",
 	);
 	const selectById = db.prepare("SELECT * FROM targets WHERE id = ?");
+	const selectByLabel = db.prepare("SELECT * FROM targets WHERE label = ? ORDER BY id DESC LIMIT 1");
 
 	return {
 		create(input) {
@@ -31,6 +36,9 @@ export function createTargetsRepo(db: DatabaseSync): TargetsRepo {
 		},
 		getById(id) {
 			return selectById.get(id) as TargetRow | undefined;
+		},
+		findByLabel(label) {
+			return selectByLabel.get(label) as TargetRow | undefined;
 		},
 	};
 }

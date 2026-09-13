@@ -10,6 +10,7 @@
  * rather than guessing, because a wrong ATT&CK tag is worse than no tag for
  * an audit trail meant to be trustworthy.
  */
+import { parseBaseTool } from "../shared/bash-command.js";
 
 export interface AttackTag {
 	tactic: string;
@@ -38,25 +39,6 @@ const TOOL_ATTACK_TAGS: Record<string, AttackTag> = {
 	smbclient: { tactic: "Discovery", technique: "T1135" },
 	rpcclient: { tactic: "Discovery", technique: "T1135" },
 };
-
-/** Extracts the base command name from a bash invocation: env assignments
- * and a leading `sudo` are skipped, and any path prefix is stripped, so
- * `FOO=bar sudo /usr/bin/nmap -sV host` resolves to `nmap`. */
-export function parseBaseTool(command: string): string | undefined {
-	const tokens = command.trim().split(/\s+/).filter(Boolean);
-	let i = 0;
-	while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i] as string)) {
-		i++;
-	}
-	if (tokens[i] === "sudo") {
-		i++;
-	}
-	const raw = tokens[i];
-	if (!raw) {
-		return undefined;
-	}
-	return raw.split("/").pop();
-}
 
 export function attackTagForCommand(command: string): AttackTag | undefined {
 	const tool = parseBaseTool(command);
