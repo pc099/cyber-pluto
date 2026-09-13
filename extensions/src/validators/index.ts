@@ -18,6 +18,7 @@ import { type Engagement, getEngagement, startEngagement } from "../state/engage
 import { type FindingRow } from "../state/types.js";
 import { validateCommandInjection } from "./command-injection.js";
 import { type GateReport, recordAndGate } from "./gate.js";
+import { validateIdor } from "./idor.js";
 import { validatePathTraversal } from "./path-traversal.js";
 import { validateSqli } from "./sqli.js";
 import { validateXss } from "./xss.js";
@@ -144,4 +145,26 @@ export default function validatorsExtension(pi: ExtensionAPI): void {
 		"Deterministic Gate 1 reflected-XSS validator: renders the page in a headless browser and confirms the injected script EXECUTED (set document.title to a nonce) — execution, not mere reflection.",
 		validateXss,
 	);
+
+	// IDOR takes two object URLs (yours vs another's) + your identity header,
+	// not the query-injection param shape, so it registers on its own.
+	pi.registerTool({
+		name: "validate_idor",
+		label: "Validate IDOR (Gate 1)",
+		description:
+			"Deterministic Gate 1 IDOR / broken-access-control validator: fetches YOUR object and ANOTHER owner's object with your identity, and confirms differential access (the other returns 200 with different, substantial data) while an unauthenticated request is denied (proving it's access-controlled, not public). You do not decide the verdict — the validator does.",
+		parameters: Type.Object({
+			finding_id: Type.Number({ description: "Candidate finding id from record_candidate" }),
+			own_url: Type.String({ description: "URL of a resource that belongs to your identity" }),
+			other_url: Type.String({ description: "URL of a resource that belongs to another identity (the IDOR target)" }),
+			cookie: Type.Optional(Type.String({ description: "Session cookie value for your identity, e.g. 'session=abc123'" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+			const loaded = loadFinding(params.finding_id);
+			if (isResult(loaded)) return loaded;
+			const headers = params.cookie ? { Cookie: params.cookie } : undefined;
+			const report = await validateIdor({ ownUrl: params.own_url, otherUrl: params.other_url, headers });
+			return recordAndGate(ctx.cwd, loaded.engagement, params.finding_id, report);
+		},
+	});
 }

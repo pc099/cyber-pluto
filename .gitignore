@@ -28,6 +28,7 @@ venv/
 *.pem
 secrets/
 credentials.json
+*.ovpn
 *credentials*.json
 
 # --- Pluto runtime state / evidence ---
