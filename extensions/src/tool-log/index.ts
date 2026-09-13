@@ -1,24 +1,27 @@
 /**
  * tool-log: logs every tool invocation Pi's reasoning core makes, in full,
- * before and after execution.
+ * before and after execution — twice over.
  *
- * This is the Session 1 stand-in for the Architecture §4 `attempts` table
- * (that's Session 2's SQLite schema). Until then, this is the audit trail —
- * per the pluto-build invariant "everything is logged", nothing runs through
- * the tool layer unrecorded, from day one.
+ * 1. A raw JSONL line per phase (tool_call / tool_execution_end), correlated
+ *    by toolCallId, in logs/tool-invocations.jsonl — the Session 1 crash-safe
+ *    capture: an attempt is on record even if the process dies mid-execution.
+ * 2. A real `attempts` row in the Layer 2 state DB (Architecture §4.3, see
+ *    attempts-recorder.ts) — the Session 2 structured, queryable half, with
+ *    an ATT&CK tag where one applies (§5.4).
  *
- * Two lines are written per invocation, correlated by toolCallId, rather than
- * one line on completion: a "tool_call" record lands before the tool runs, so
- * an attempt is on the record even if the process dies mid-execution.
+ * Per the pluto-build invariant "everything is logged," nothing reaches the
+ * tool layer unrecorded, from day one.
  */
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
+	SessionStartEvent,
 	ToolCallEvent,
 	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import { recordAttemptEnd, recordAttemptStart, startEngagement } from "./attempts-recorder.js";
 
 const LOG_DIR = "logs";
 const LOG_FILE = "tool-invocations.jsonl";
@@ -61,7 +64,12 @@ async function appendLogEntry(cwd: string, entry: ToolLogEntry): Promise<void> {
 }
 
 export default function toolLogExtension(pi: ExtensionAPI): void {
+	pi.on("session_start", (_event: SessionStartEvent, ctx: ExtensionContext) => {
+		startEngagement(ctx.cwd);
+	});
+
 	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
+		recordAttemptStart(event.toolCallId, event.toolName, event.input);
 		await appendLogEntry(ctx.cwd, {
 			phase: "tool_call",
 			ts: new Date().toISOString(),
@@ -73,6 +81,7 @@ export default function toolLogExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_execution_end", async (event: ToolExecutionEndEvent, ctx: ExtensionContext) => {
+		await recordAttemptEnd(ctx.cwd, event.toolCallId, event.isError, event.result);
 		await appendLogEntry(ctx.cwd, {
 			phase: "tool_execution_end",
 			ts: new Date().toISOString(),
