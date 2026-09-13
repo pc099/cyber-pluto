@@ -20,6 +20,12 @@ export interface AttemptsRepo {
 	start(input: StartAttemptInput): AttemptRow;
 	finish(id: number, input: FinishAttemptInput): AttemptRow;
 	getById(id: number): AttemptRow | undefined;
+	/** Total attempts recorded for a target — the engagement's tool-call count
+	 * for the §10.5 hard cap (persistent across Pi processes). */
+	countByTarget(targetId: number): number;
+	/** The most recent commands for a target (newest first), for stuck
+	 * detection's rolling window (§10.5). */
+	recentCommandsByTarget(targetId: number, limit: number): string[];
 }
 
 export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
@@ -32,6 +38,10 @@ export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
 		 WHERE id = ?`,
 	);
 	const selectById = db.prepare("SELECT * FROM attempts WHERE id = ?");
+	const countByTargetStmt = db.prepare("SELECT COUNT(*) AS c FROM attempts WHERE target_id = ?");
+	const recentByTargetStmt = db.prepare(
+		"SELECT command FROM attempts WHERE target_id = ? ORDER BY id DESC LIMIT ?",
+	);
 
 	return {
 		start(input) {
@@ -51,6 +61,12 @@ export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
 		},
 		getById(id) {
 			return selectById.get(id) as AttemptRow | undefined;
+		},
+		countByTarget(targetId) {
+			return (countByTargetStmt.get(targetId) as { c: number }).c;
+		},
+		recentCommandsByTarget(targetId, limit) {
+			return (recentByTargetStmt.all(targetId, limit) as Array<{ command: string }>).map((r) => r.command);
 		},
 	};
 }

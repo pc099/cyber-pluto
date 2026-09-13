@@ -23,6 +23,9 @@ export interface NodesRepo {
 	listActiveByTarget(targetId: number): NodeRow[];
 	/** The engagement's root node (no parent), if one already exists. */
 	findRoot(targetId: number): NodeRow | undefined;
+	/** Total nodes for a target — stuck detection watches whether the tree is
+	 * still growing (§10.5). */
+	countByTarget(targetId: number): number;
 }
 
 export function createNodesRepo(db: DatabaseSync): NodesRepo {
@@ -36,6 +39,7 @@ export function createNodesRepo(db: DatabaseSync): NodesRepo {
 	const selectRoot = db.prepare(
 		"SELECT * FROM nodes WHERE target_id = ? AND parent_id IS NULL ORDER BY id ASC LIMIT 1",
 	);
+	const countByTargetStmt = db.prepare("SELECT COUNT(*) AS c FROM nodes WHERE target_id = ?");
 
 	return {
 		create(input) {
@@ -57,6 +61,9 @@ export function createNodesRepo(db: DatabaseSync): NodesRepo {
 		},
 		findRoot(targetId) {
 			return selectRoot.get(targetId) as NodeRow | undefined;
+		},
+		countByTarget(targetId) {
+			return (countByTargetStmt.get(targetId) as { c: number }).c;
 		},
 	};
 }
