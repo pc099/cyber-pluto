@@ -1,6 +1,6 @@
 ---
 name: rce-command-injection
-description: Testing and confirming OS command injection and remote code execution. Use when input reaches a shell, exec, template, or deserialization sink, or when a service runs user-supplied data. Covers filter/WAF evasion and ties confirmation to Pluto's Gate 1 command-injection validator. Restraint: prove the door opens, do not walk through it.
+description: Testing and confirming OS command injection and remote code execution. Use when input reaches a shell, exec, template, or deserialization sink, or when a service runs user-supplied data. Covers filter/WAF evasion and ties confirmation to Pluto's Gate 1 command-injection validator, proving the door opens without walking through it.
 metadata:
   category: vulnerabilities
   attack_class: injection
