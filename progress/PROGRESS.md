@@ -5,16 +5,19 @@
 ## Current position
 - **Phase:** 1 — The Vertical Slice
 - **Active session:** Session 1 — Fork Pi, bare-bones reasoning-to-shell loop
-- **Status:** in flight — blocked on operator input (Pi has no Anthropic credentials on this VPS)
-- **Next concrete action:** get an API key (or a completed `/login` OAuth) into Pi, then run the live smoke test: a real prompt through `pi` that issues `nmap -sV localhost` via the bash tool and reads the structured result back, with `logs/tool-invocations.jsonl` showing the full tool_call/tool_execution_end pair.
+- **Status:** done
+- **Next concrete action:** Session 2 — implement the Layer 2 SQLite state schema (Architecture §4: `targets`, `nodes`, `findings`, `credentials`, `attempts`, `validations`, `submissions`, with indexes) and wire the Session 1 loop to write real `attempts` rows on every tool call, replacing the interim `logs/tool-invocations.jsonl` capture.
 
 ## In flight (granular — what is being done *right now*)
-- Waiting on the operator to complete `pi`'s interactive `/login` (their choice, see Open questions below). While waiting, de-risked the parts of the live demo that don't need live credentials:
-  - Ran the exact target command standalone: `nmap -sV localhost` completes in ~0.6s and returns clean structured output (SSH 22, SMTP 25 with versions) — confirms the smoke-test prompt won't hang or need scan-tuning flags.
-  - Verified `extensions/src/tool-log/index.ts`'s actual logging behavior (not just that it typechecks/loads) with a standalone harness that calls the compiled extension's `tool_call`/`tool_execution_end` handlers directly with nmap-shaped synthetic events, bypassing the need for a live LLM turn. Confirmed `logs/tool-invocations.jsonl` gets both records, correctly correlated by `toolCallId`, with the full input and full result captured. Harness was throwaway (scratchpad, not committed) — the assertion is now recorded here instead.
-- Everything else in Session 1's scope is done and de-risked; only the actual live LLM-driven run remains, and that's blocked on credentials. Per CLAUDE.md/build-plan discipline ("don't build ahead of the current session," and Session 1's Done condition is specifically the live prompt-to-command-to-logged-result loop), **not** starting Session 2 until that live run completes — flagged to the operator rather than assumed.
+- (nothing — Session 1 closed out cleanly)
 
 ## Done (most recent first — with commit hash)
+- `3e7b061` (ledger) — **Session 1 closed out: the live reasoning→shell loop is proven.** Operator added an `ANTHROPIC_API_KEY` to Pi. Ran:
+  `pi --provider anthropic --model claude-haiku-4-5 -e extensions/src/tool-log/index.ts --no-session -p "Run nmap -sV against localhost and summarize the open services you find, one line each."`
+  (Haiku 4.5 and `--no-session` deliberately, to keep the operator's $5 budget essentially untouched — this is a one-shot print-mode call, not an open session.)
+  - Claude decided to call the `bash` tool with `nmap -sV localhost`, Pi executed it for real, and Claude's final answer correctly summarized the two real open services it found (OpenSSH 10.0p2, Exim smtpd 4.98.2) — confirming the reasoning core reads real structured tool output back, not just issues commands blind.
+  - `logs/tool-invocations.jsonl` (gitignored runtime data, not committed) captured both the `tool_call` record (exact command, exact toolCallId, timestamp) and the `tool_execution_end` record (full nmap stdout, `isError: false`) for this run — the tool-log extension works end-to-end against a live agent turn, not just the synthetic harness from the prior increment.
+  - This satisfies Session 1's build-plan Done condition exactly: "a single prompt results in a real command executing and its output returning to the reasoning core, fully logged."
 - `4cc442d` — Session 1: fork Pi in as a submodule, add tool-invocation logging.
   - `pi/pi` is now a git submodule (not vendored) tracking `https://github.com/pc099/pi`, pinned at `b215884` — the already-cloned nested repo from Session 0 converted in place with `git submodule add`, no history rewrite needed. Working tree inside the submodule is clean — the base agent loop is genuinely unmodified.
   - Node 20.19.2 (Session 0's provisioning) is below Pi's engine requirement (`>=22.19.0` on several packages). Installed Node v24.21.0 LTS to `/usr/local` (takes PATH precedence over the apt-installed v20, which is left in place unused). `npm install --ignore-scripts` and `npm run build` then succeeded clean inside `pi/pi` — CLI at `pi/pi/packages/coding-agent/dist/bundle/cli.js`, version `0.85.1`.
@@ -33,7 +36,7 @@
 
 ## Session status board
 - [x] Session 0  — Repo scaffolding
-- [ ] Session 1  — Fork Pi, bare-bones reasoning->shell loop
+- [x] Session 1  — Fork Pi, bare-bones reasoning->shell loop
 - [ ] Session 2  — SQLite state schema
 - [ ] Session 3  — Recon -> candidate finding
 - [ ] Session 4  — Gate 1 validator (SQLi)            [Opus]
@@ -47,15 +50,11 @@
 - [ ] Session 12 — HackTheBox dry run
 
 ## Open questions / blockers
-- **Pi has no Anthropic credentials on this VPS.** `~/.pi` doesn't exist yet — this is the first time Pi has been run here. Need the operator to choose: (a) supply an `ANTHROPIC_API_KEY` (env var or `--api-key`), or (b) run `pi` interactively themselves and complete `/login` (OAuth needs a browser, so it can't be done headlessly from this session). Asked the operator; awaiting their answer.
+- (none)
 
 ## Resume-here note (write before stopping, or when nearing a usage limit)
-- **Session 1 is in flight, committed at `4cc442d`.** Everything is done except the live demo. Start the next session by loading `pluto-build` + `typescript-patterns`, then read the "Open questions" entry above first.
-- **The moment credentials are available**, run the smoke test from the repo root:
-  `./pi/pi/pi-test.sh -e extensions/src/tool-log/index.ts -p "Run nmap -sV against localhost and summarize the open services you find."`
-  (`localhost` is the deliberate lab target — no external network dependency, unambiguously in-scope since it's this VPS itself, and Session 2+'s `targets.scope_notes` doesn't exist yet to authorize anything else.)
-- **Definition of done for Session 1** (don't stop short of this): the prompt above actually runs `nmap` via Pi's bash tool, Pi reads the structured result back into its response, and `logs/tool-invocations.jsonl` shows a `tool_call`/`tool_execution_end` pair for it with the real command and real output captured. Then commit the log file's *existence* is not what's committed (it's gitignored, runtime data) — just confirm it, note the result in this ledger, and mark Session 1 done on the status board.
-- Do **not** start Session 2 (SQLite state schema) in the same sitting unless explicitly asked — Session 1 ends at the shell-command proof, per the build plan.
-- Toolchain notes for next time: Node was upgraded from the Session-0-provisioned v20.19.2 to **v24.21.0**, installed to `/usr/local` (shadows the apt v20 install, which is untouched) — this was required because Pi's packages declare `engines.node >= 22.19.0`. `pi/pi` is a **submodule**, not vendored — `git submodule update --init` after a fresh clone. Pi is already built (`pi/pi/packages/coding-agent/dist/bundle/cli.js`); re-run `npm run build` in `pi/pi` only if the submodule pointer moves.
+- **Session 1 is fully done.** Start the next session by loading `pluto-build` + `python-patterns`/`typescript-patterns` as needed, then begin **Session 2 — SQLite state schema** per `CLAUDE_CODE_BUILD_PLAN.md`: implement Architecture §4's `targets`, `nodes` (self-referencing tree), `findings`, `credentials`, `attempts`, `validations`, `submissions` tables with their indexes, and wire the Session 1 loop so every tool call writes a real `attempts` row (the `tool-log` extension's JSONL capture was the deliberate Session 1 stand-in for this — it can stay alongside the DB writes, or the extension can be pointed at the DB instead, either is a Session 2 design call, not decided yet).
+- Toolchain notes: Node was upgraded from the Session-0-provisioned v20.19.2 to **v24.21.0**, installed to `/usr/local` (shadows the apt v20 install, which is untouched) — required because Pi's packages declare `engines.node >= 22.19.0`. `pi/pi` is a **submodule**, not vendored — `git submodule update --init` after a fresh clone. Pi is already built (`pi/pi/packages/coding-agent/dist/bundle/cli.js`); re-run `npm run build` in `pi/pi` only if the submodule pointer moves.
+- Pi now has a working `ANTHROPIC_API_KEY` configured by the operator (not committed, per CLAUDE.md's secrets rule) — the operator is running a small budget ($5) against it, so **default to the cheapest model that fits the task** (`claude-haiku-4-5` worked fine for the Session 1 smoke test) and prefer one-shot `-p --no-session` invocations over open interactive sessions unless a session genuinely needs to persist, to avoid burning budget unnecessarily.
 - `extensions/` (TS) and `services/` (Python) both have a working hello-world plus now `tool-log`; `extensions/package.json` depends on `@earendil-works/pi-coding-agent` via a `file:` link into the submodule for types only (erased at Pi runtime via `import type`, so it isn't a runtime dependency).
-- Nothing else is half-finished; the repo is otherwise in a clean, committed state.
+- Nothing is half-finished; the repo is in a clean, committed state.
