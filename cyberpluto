@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+#
+# cyberpluto — the operator launcher for the Pluto autonomous pentest harness.
+#
+# Opens an interactive Pi shell (Camp 1) with the full Pluto extension stack
+# loaded, scope pinned before anything runs, and sane lifecycle caps. Run it
+# inside tmux for persistence: start it, detach (Ctrl-b d), close your laptop,
+# reattach later — the engagement keeps running and the SQLite state DB + kill
+# switch remain the control surface.
+#
+# Usage:
+#   cyberpluto [TARGET] [OBJECTIVE...]        # target = primary host/IP
+#   cyberpluto --scope 10.129.90.219,10.10.11.0/24 ...
+#   cyberpluto --scope-file scope.yaml ...
+#   cyberpluto 10.129.90.219 "find a foothold" --tunnel --model claude-sonnet-5
+#
+# Options:
+#   --scope LIST        Comma/space list of in-scope hosts/IPs (adds to TARGET)
+#   --scope-file FILE   Read in-scope hosts from a file (one per line, or YAML-ish)
+#   --model NAME        Reasoning model (default: claude-haiku-4-5)
+#   --max-calls N       Hard cap on tool calls this engagement (default: 200)
+#   --max-wall SECONDS  Hard cap on wall-clock seconds (default: 3600)
+#   --label NAME        Engagement label (default: derived from target)
+#   --tunnel            Brief Pluto to use `nmap -sT` (TCP connect over a tunnel)
+#   --dry-run           Print the resolved config + launch command, don't start
+#   -h, --help          This help
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+MODEL="claude-haiku-4-5"
+MAX_CALLS=200
+MAX_WALL=3600
+SCOPE=""
+SCOPE_FILE=""
+TARGET=""
+LABEL=""
+TUNNEL=0
+DRY_RUN=0
+OBJECTIVE_PARTS=()
+
+usage() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scope)      SCOPE="$2"; shift 2 ;;
+    --scope-file) SCOPE_FILE="$2"; shift 2 ;;
+    --model)      MODEL="$2"; shift 2 ;;
+    --max-calls)  MAX_CALLS="$2"; shift 2 ;;
+    --max-wall)   MAX_WALL="$2"; shift 2 ;;
+    --label)      LABEL="$2"; shift 2 ;;
+    --tunnel)     TUNNEL=1; shift ;;
+    --dry-run)    DRY_RUN=1; shift ;;
+    -h|--help)    usage 0 ;;
+    -*)           echo "unknown option: $1" >&2; usage 1 ;;
+    *)            if [[ -z "$TARGET" ]]; then TARGET="$1"; else OBJECTIVE_PARTS+=("$1"); fi; shift ;;
+  esac
+done
+
+# --- banner -----------------------------------------------------------------
+cat <<'BANNER'
+
+   ______      __              ____  __      __
+  / ____/_  __/ /_  ___  _____/ __ \/ /_  __/ /_____
+ / /   / / / / __ \/ _ \/ ___/ /_/ / / / / / __/ __ \
+/ /___/ /_/ / /_/ /  __/ /  / ____/ / /_/ / /_/ /_/ /
+\____/\__, /_.___/\___/_/  /_/   /_/\__,_/\__/\____/
+     /____/   autonomous cybersecurity testing harness
+
+           two gates · red-lines · no PoC, no finding
+BANNER
+
+# --- resolve scope ----------------------------------------------------------
+# Scope hosts = TARGET + --scope list + --scope-file entries. This is the
+# safe-harbor boundary; the red-lines gate refuses any tool call touching a
+# host not in it. (Exact-host match today; CIDR ranges are a documented gap —
+# list the individual hosts, or extend red-lines' scope matcher.)
+declare -a SCOPE_HOSTS=()
+[[ -n "$TARGET" ]] && SCOPE_HOSTS+=("$TARGET")
+if [[ -n "$SCOPE" ]]; then
+  IFS=', ' read -r -a _extra <<< "$SCOPE"
+  SCOPE_HOSTS+=("${_extra[@]}")
+fi
+if [[ -n "$SCOPE_FILE" ]]; then
+  [[ -f "$SCOPE_FILE" ]] || { echo "scope file not found: $SCOPE_FILE" >&2; exit 1; }
+  while read -r line; do
+    line="${line%%#*}"; line="$(echo "$line" | tr -d '[:space:]' | sed 's/^[-*]//; s/^host://; s/^-//')"
+    [[ -n "$line" ]] && SCOPE_HOSTS+=("$line")
+  done < "$SCOPE_FILE"
+fi
+
+if [[ ${#SCOPE_HOSTS[@]} -eq 0 ]]; then
+  read -r -p "No target/scope given. Enter the primary in-scope host/IP: " TARGET
+  [[ -n "$TARGET" ]] || { echo "a target is required." >&2; exit 1; }
+  SCOPE_HOSTS+=("$TARGET")
+fi
+[[ -z "$TARGET" ]] && TARGET="${SCOPE_HOSTS[0]}"
+[[ -z "$LABEL" ]] && LABEL="engagement-$(echo "$TARGET" | tr -c 'a-zA-Z0-9' '-' | sed 's/-*$//')"
+
+# de-dupe scope
+SCOPE_CSV="$(printf '%s\n' "${SCOPE_HOSTS[@]}" | awk 'NF && !seen[$0]++' | paste -sd, -)"
+
+# --- pre-flight -------------------------------------------------------------
+if [[ ! -f extensions/dist/tool-log/index.js ]]; then
+  echo "[cyberpluto] building extensions…"
+  ( cd extensions && npm run build >/dev/null 2>&1 ) || { echo "extension build failed — run 'cd extensions && npm run build'." >&2; exit 1; }
+fi
+KB_NOTE="not ingested (recon KB nodes disabled)"
+if [[ -d state/kb ]]; then KB_NOTE="ready (state/kb)"; fi
+REACH="unknown"
+if command -v ping >/dev/null; then
+  if ping -c1 -W2 "$TARGET" >/dev/null 2>&1; then REACH="reachable"; else REACH="UNREACHABLE (no route/tunnel?)"; fi
+fi
+
+# --- engagement briefing (system-prompt append) -----------------------------
+TUNNEL_NOTE=""
+[[ $TUNNEL -eq 1 ]] && TUNNEL_NOTE=" Traffic is routed through a TCP-only tunnel, so use 'nmap -sT' (TCP connect), not the default SYN scan."
+OBJECTIVE="${OBJECTIVE_PARTS[*]:-}"
+BRIEF="You are Pluto, an AUTHORIZED autonomous penetration-testing harness on a live engagement.
+In-scope hosts: ${SCOPE_CSV}. Primary target: ${TARGET}. Stay strictly within scope — the red-lines gate blocks any out-of-scope or prohibited action before it runs, and going out of scope forfeits safe harbor.
+Two-gate discipline: a finding is only a fact once a deterministic validator reproduces it (use the validate_* tools) — never act on a 'candidate' as though 'validated'; and nothing is ever submitted externally without explicit human approval.
+Everything you do is logged. The operator can halt you at any instant (kill switch).${TUNNEL_NOTE}
+Work the engagement: recon, grow the investigation tree, validate findings through Gate 1, recover access, and report — consulting the knowledge base and runtime skills as you go.$( [[ -n "$OBJECTIVE" ]] && echo " Operator objective: ${OBJECTIVE}" )"
+
+# --- extension stack --------------------------------------------------------
+EXTS=(
+  extensions/src/tool-log/index.ts
+  extensions/src/red-lines/index.ts
+  extensions/src/recon/index.ts
+  extensions/src/validators/index.ts
+  extensions/src/vision/index.ts
+  extensions/src/exploit/index.ts
+  extensions/src/lifecycle/index.ts
+)
+E_ARGS=(); for e in "${EXTS[@]}"; do E_ARGS+=(-e "$e"); done
+
+# --- summary ----------------------------------------------------------------
+printf '  target      %s  (%s)\n' "$TARGET" "$REACH"
+printf '  scope       %s\n' "$SCOPE_CSV"
+printf '  model       %s\n' "$MODEL"
+printf '  caps        %s tool-calls · %ss wall-clock\n' "$MAX_CALLS" "$MAX_WALL"
+printf '  knowledge   %s\n' "$KB_NOTE"
+printf '  label       %s\n' "$LABEL"
+printf '  kill switch touch %s/state/KILL_SWITCH\n' "$SCRIPT_DIR"
+echo   "  ---------------------------------------------------------------"
+echo   "  Type your instructions in the shell. Gate 2 (submission) always"
+echo   "  requires your explicit approval — Pluto never submits on its own."
+echo
+
+export PLUTO_TARGET_LABEL="$LABEL"
+export PLUTO_TARGET_HOST="$TARGET"
+export PLUTO_SCOPE_HOSTS="$SCOPE_CSV"
+export PLUTO_MAX_TOOL_CALLS="$MAX_CALLS"
+export PLUTO_MAX_WALLCLOCK_S="$MAX_WALL"
+export PLUTO_SUBAGENT_MODEL="$MODEL"
+
+LAUNCH=( ./pi/pi/pi-test.sh --provider anthropic --model "$MODEL"
+         --skill runtime-skills "${E_ARGS[@]}"
+         --append-system-prompt "$BRIEF" )
+
+if [[ $DRY_RUN -eq 1 ]]; then
+  echo "[dry-run] env: PLUTO_TARGET_HOST=$PLUTO_TARGET_HOST PLUTO_SCOPE_HOSTS=$PLUTO_SCOPE_HOSTS PLUTO_MAX_TOOL_CALLS=$PLUTO_MAX_TOOL_CALLS"
+  echo "[dry-run] launch: ${LAUNCH[*]}"
+  exit 0
+fi
+
+exec "${LAUNCH[@]}"
