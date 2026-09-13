@@ -22,6 +22,9 @@
 #   --max-wall SECONDS  Hard cap on wall-clock seconds (default: 3600)
 #   --label NAME        Engagement label (default: derived from target)
 #   --tunnel            Brief Pluto to use `nmap -sT` (TCP connect over a tunnel)
+#   --program NAME      Bug-bounty program handle (recorded on submissions)
+#   --traffic-id "H: v" Traffic-ID header for bug bounty, e.g. "X-Bug-Bounty: me"
+#   --rate N            Max requests/second Pluto's own probes make
 #   --dry-run           Print the resolved config + launch command, don't start
 #   -h, --help          This help
 
@@ -39,6 +42,9 @@ TARGET=""
 LABEL=""
 TUNNEL=0
 DRY_RUN=0
+PROGRAM=""
+TRAFFIC_ID=""
+RATE=""
 OBJECTIVE_PARTS=()
 
 usage() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -51,6 +57,9 @@ while [[ $# -gt 0 ]]; do
     --max-calls)  MAX_CALLS="$2"; shift 2 ;;
     --max-wall)   MAX_WALL="$2"; shift 2 ;;
     --label)      LABEL="$2"; shift 2 ;;
+    --program)    PROGRAM="$2"; shift 2 ;;
+    --traffic-id) TRAFFIC_ID="$2"; shift 2 ;;
+    --rate)       RATE="$2"; shift 2 ;;
     --tunnel)     TUNNEL=1; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
     -h|--help)    usage 0 ;;
@@ -117,11 +126,15 @@ fi
 # --- engagement briefing (system-prompt append) -----------------------------
 TUNNEL_NOTE=""
 [[ $TUNNEL -eq 1 ]] && TUNNEL_NOTE=" Traffic is routed through a TCP-only tunnel, so use 'nmap -sT' (TCP connect), not the default SYN scan."
+BB_NOTE=""
+if [[ -n "$TRAFFIC_ID" || -n "$PROGRAM" ]]; then
+  BB_NOTE=" This is a BUG-BOUNTY engagement${PROGRAM:+ for program '${PROGRAM}'}. Compliance is mandatory: include the traffic-identification header${TRAFFIC_ID:+ '${TRAFFIC_ID}'} on EVERY HTTP request you make with tools (curl -H, wget --header, sqlmap --headers, ffuf -H, etc.)${RATE:+, and respect a rate limit of ${RATE} request(s)/second (curl --rate, sqlmap --delay, nmap --max-rate ${RATE})}. Prove impact minimally and never exfiltrate real data. NOTHING is submitted without the operator's explicit approval."
+fi
 OBJECTIVE="${OBJECTIVE_PARTS[*]:-}"
 BRIEF="You are Pluto, an AUTHORIZED autonomous penetration-testing harness on a live engagement.
 In-scope hosts: ${SCOPE_CSV}. Primary target: ${TARGET}. Stay strictly within scope — the red-lines gate blocks any out-of-scope or prohibited action before it runs, and going out of scope forfeits safe harbor.
 Two-gate discipline: a finding is only a fact once a deterministic validator reproduces it (use the validate_* tools) — never act on a 'candidate' as though 'validated'; and nothing is ever submitted externally without explicit human approval.
-Everything you do is logged. The operator can halt you at any instant (kill switch).${TUNNEL_NOTE}
+Everything you do is logged. The operator can halt you at any instant (kill switch).${TUNNEL_NOTE}${BB_NOTE}
 Work the engagement: recon, grow the investigation tree, validate findings through Gate 1, recover access, and report — consulting the knowledge base and runtime skills as you go. Record any credentials you recover with the record_credential tool.${OBJECTIVE:+ Operator objective: ${OBJECTIVE}}"
 
 # --- extension stack --------------------------------------------------------
@@ -144,6 +157,8 @@ printf '  model       %s\n' "$MODEL"
 printf '  caps        %s tool-calls · %ss wall-clock\n' "$MAX_CALLS" "$MAX_WALL"
 printf '  knowledge   %s\n' "$KB_NOTE"
 printf '  label       %s\n' "$LABEL"
+[[ -n "$PROGRAM$TRAFFIC_ID$RATE" ]] && printf '  bug-bounty  program=%s · traffic-id=%s · rate=%s\n' "${PROGRAM:-–}" "${TRAFFIC_ID:-–}" "${RATE:-unset}"
+true
 printf '  kill switch touch %s/state/KILL_SWITCH\n' "$SCRIPT_DIR"
 echo   "  ---------------------------------------------------------------"
 echo   "  Type instructions to Pluto, or drive the engagement directly:"
@@ -158,6 +173,10 @@ export PLUTO_SCOPE_HOSTS="$SCOPE_CSV"
 export PLUTO_MAX_TOOL_CALLS="$MAX_CALLS"
 export PLUTO_MAX_WALLCLOCK_S="$MAX_WALL"
 export PLUTO_SUBAGENT_MODEL="$MODEL"
+[[ -n "$PROGRAM" ]]    && export PLUTO_PROGRAM="$PROGRAM"
+[[ -n "$TRAFFIC_ID" ]] && export PLUTO_TRAFFIC_ID="$TRAFFIC_ID"
+[[ -n "$RATE" ]]       && export PLUTO_RATE_LIMIT="$RATE"
+true  # keep set -e happy after the conditional exports
 
 LAUNCH=( ./pi/pi/pi-test.sh --provider anthropic --model "$MODEL"
          --skill runtime-skills "${E_ARGS[@]}"

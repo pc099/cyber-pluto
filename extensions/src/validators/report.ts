@@ -8,6 +8,8 @@
  * and reused by every class.
  */
 
+import { politeFetch } from "../shared/http-policy.js";
+
 export const REQUEST_TIMEOUT_MS = 5000;
 export const MAX_BODY_CHARS = 8000;
 
@@ -54,7 +56,7 @@ export async function probe(endpoint: string, param: string, label: string, valu
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
-		const res = await fetch(requestUrl, { signal: controller.signal });
+		const res = await politeFetch(requestUrl, { signal: controller.signal });
 		const body = (await res.text()).slice(0, MAX_BODY_CHARS);
 		return { label, requestUrl, payload: value, status: res.status, body };
 	} catch (err) {

@@ -31,6 +31,8 @@
  * isolated and unit-testable.
  */
 
+import { politeFetch } from "../shared/http-policy.js";
+
 const REQUEST_TIMEOUT_MS = 5000;
 const MAX_BODY_CHARS = 4000;
 const MAX_UNION_COLUMNS = 8;
@@ -104,7 +106,7 @@ async function probe(target: SqliTarget, label: string, payload: string): Promis
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
-		const res = await fetch(requestUrl, { signal: controller.signal });
+		const res = await politeFetch(requestUrl, { signal: controller.signal });
 		const body = (await res.text()).slice(0, MAX_BODY_CHARS);
 		return { label, requestUrl, payload, status: res.status, body };
 	} catch (err) {

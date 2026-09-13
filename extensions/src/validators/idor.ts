@@ -10,6 +10,7 @@
  * all — an unauthenticated request to the other object must be DENIED. If it
  * is public (unauth also 200), that is not IDOR and the validator rejects.
  */
+import { politeFetch } from "../shared/http-policy.js";
 import type { CapturedExchange, ValidationReport, VerifiableStep } from "./report.js";
 
 const TIMEOUT_MS = 5000;
@@ -28,7 +29,7 @@ async function fetchCapture(label: string, url: string, headers?: Record<string,
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 	try {
-		const res = await fetch(url, { headers, signal: controller.signal, redirect: "manual" });
+		const res = await politeFetch(url, { headers, signal: controller.signal, redirect: "manual" });
 		const body = Buffer.from(await res.arrayBuffer()).toString("latin1").slice(0, 8000);
 		return { label, requestUrl: url, payload: JSON.stringify(headers ?? {}), status: res.status, body };
 	} catch (err) {
