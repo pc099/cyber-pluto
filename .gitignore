@@ -51,3 +51,7 @@ reports/
 *.swp
 .vscode/
 .idea/
+
+# Operator engagement scope (may list private-program assets) — keep the example only
+/scope.yaml
+/scope.local.yaml

@@ -1,0 +1,23 @@
+# Example engagement scope for cyberpluto.
+#
+#   ./cyberpluto --scope-file scope.example.yaml "find and validate vulns"
+#
+# The launcher extracts hosts/IPs from this file into the scope allowlist
+# (PLUTO_SCOPE_HOSTS). The red-lines gate then blocks any tool call that
+# touches a host NOT in the list — this is the safe-harbor boundary, so keep
+# it exactly matching the program's in-scope assets.
+#
+# One host per line. Lines are trimmed; a leading "- " or "host:" is stripped;
+# "#" starts a comment. Wildcards/CIDRs: list the concrete hosts you will test
+# (red-lines matches exact hosts today; CIDR/wildcard matching is a documented
+# gap — expand the ranges you actually engage).
+
+- app.example.com
+- api.example.com
+- 10.129.90.219        # e.g. an HTB box target
+
+# Out-of-scope assets are simply omitted — anything not listed is blocked.
+# For a bug-bounty run, also pass:
+#   --program acme-corp
+#   --traffic-id "X-Bug-Bounty: your-handle"
+#   --rate 1
