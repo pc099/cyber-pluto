@@ -1,0 +1,43 @@
+# --- Pi fork (nested clone of earendil-works/pi) ---
+# Left untracked deliberately: Session 1 decides how it's brought into this
+# repo (submodule vs. vendored fork) and forks it for real. Don't stage it
+# from Session 0.
+/pi/
+
+# --- TypeScript (extensions/) ---
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# --- Python (services/) ---
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Secrets — never commit ---
+.env
+.env.*
+*.key
+*.pem
+secrets/
+credentials.json
+*credentials*.json
+
+# --- Pluto runtime state / evidence ---
+state/*.db
+state/*.sqlite
+state/*.sqlite3
+evidence/
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.vscode/
+.idea/

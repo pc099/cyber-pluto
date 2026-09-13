@@ -1,0 +1,17 @@
+# Pluto's Python layer: KB ingestion/embeddings, the vector-store (Qdrant)
+# client, and the Metasploit MCP bridge. Session 0: pinned to what proves the
+# venv out; each build-plan session adds what it actually needs.
+#
+# Config / typed records
+python-dotenv==1.0.1
+pydantic==2.9.2
+
+# HTTP (MSF RPC, OOB interaction server, KB source fetches)
+requests==2.32.3
+
+# Vector store client (Architecture §6 — Qdrant is the working candidate)
+qdrant-client==1.11.3
+
+# Testing
+pytest==8.3.3
+pytest-asyncio==0.24.0
