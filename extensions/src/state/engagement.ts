@@ -18,10 +18,12 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { type AttemptsRepo, createAttemptsRepo } from "./attempts-repo.js";
+import { type CredentialsRepo, createCredentialsRepo } from "./credentials-repo.js";
 import { openStateDb } from "./db.js";
 import { type FindingsRepo, createFindingsRepo } from "./findings-repo.js";
 import { type NodesRepo, createNodesRepo } from "./nodes-repo.js";
 import { type ScreenshotsRepo, createScreenshotsRepo } from "./screenshots-repo.js";
+import { type SubmissionsRepo, createSubmissionsRepo } from "./submissions-repo.js";
 import { type TargetsRepo, createTargetsRepo } from "./targets-repo.js";
 import { type ValidationsRepo, createValidationsRepo } from "./validations-repo.js";
 
@@ -36,6 +38,8 @@ export interface Engagement {
 		findings: FindingsRepo;
 		validations: ValidationsRepo;
 		screenshots: ScreenshotsRepo;
+		credentials: CredentialsRepo;
+		submissions: SubmissionsRepo;
 	};
 }
 
@@ -54,6 +58,8 @@ export function startEngagement(cwd: string): Engagement {
 		findings: createFindingsRepo(db),
 		validations: createValidationsRepo(db),
 		screenshots: createScreenshotsRepo(db),
+		credentials: createCredentialsRepo(db),
+		submissions: createSubmissionsRepo(db),
 	};
 
 	const label = process.env["PLUTO_TARGET_LABEL"] ?? "ad-hoc";

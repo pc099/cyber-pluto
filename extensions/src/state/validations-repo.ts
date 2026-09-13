@@ -19,6 +19,8 @@ export interface CreateValidationInput {
 export interface ValidationsRepo {
 	create(input: CreateValidationInput): ValidationRow;
 	getById(id: number): ValidationRow | undefined;
+	/** All validation records for a finding (for reports and drill-down). */
+	listByFinding(findingId: number): ValidationRow[];
 }
 
 export function createValidationsRepo(db: DatabaseSync): ValidationsRepo {
@@ -27,6 +29,7 @@ export function createValidationsRepo(db: DatabaseSync): ValidationsRepo {
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 	);
 	const selectById = db.prepare("SELECT * FROM validations WHERE id = ?");
+	const selectByFinding = db.prepare("SELECT * FROM validations WHERE finding_id = ? ORDER BY id");
 
 	return {
 		create(input) {
@@ -42,6 +45,9 @@ export function createValidationsRepo(db: DatabaseSync): ValidationsRepo {
 		},
 		getById(id) {
 			return selectById.get(id) as ValidationRow | undefined;
+		},
+		listByFinding(findingId) {
+			return selectByFinding.all(findingId) as unknown as ValidationRow[];
 		},
 	};
 }

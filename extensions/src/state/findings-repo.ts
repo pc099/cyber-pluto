@@ -51,6 +51,11 @@ export interface FindingsRepo {
 	/** Gate 1 rejection — `candidate` to `rejected` when the validator did not
 	 * reproduce the effect. Negative results are kept, never deleted. */
 	reject(findingId: number): FindingRow;
+	/** Gate 2 — `validated` to `submitted`, recorded ONLY after human approval
+	 * (a submissions row). Guarded: only a validated finding can be submitted. */
+	markSubmitted(findingId: number): FindingRow;
+	listByTarget(targetId: number): FindingRow[];
+	countByStatus(targetId: number): { candidate: number; validated: number; submitted: number; rejected: number };
 }
 
 export function createFindingsRepo(db: DatabaseSync): FindingsRepo {
@@ -62,6 +67,9 @@ export function createFindingsRepo(db: DatabaseSync): FindingsRepo {
 	const selectById = db.prepare("SELECT * FROM findings WHERE id = ?");
 	const selectValidationById = db.prepare("SELECT * FROM validations WHERE id = ?");
 	const updateStatus = db.prepare("UPDATE findings SET status = ? WHERE id = ? AND status = 'candidate'");
+	const updateSubmitted = db.prepare("UPDATE findings SET status = 'submitted' WHERE id = ? AND status = 'validated'");
+	const selectByTarget = db.prepare("SELECT * FROM findings WHERE target_id = ? ORDER BY id");
+	const countStatus = db.prepare("SELECT status, COUNT(*) AS c FROM findings WHERE target_id = ? GROUP BY status");
 
 	function requireFinding(id: number): FindingRow {
 		const finding = selectById.get(id) as unknown as FindingRow | undefined;
@@ -125,6 +133,29 @@ export function createFindingsRepo(db: DatabaseSync): FindingsRepo {
 			}
 			updateStatus.run("rejected", findingId);
 			return requireFinding(findingId);
+		},
+		markSubmitted(findingId) {
+			const finding = requireFinding(findingId);
+			if (finding.status !== "validated") {
+				throw new IllegalStatusTransition(
+					`finding ${findingId} is '${finding.status}', only a 'validated' finding can be submitted (Gate 2)`,
+				);
+			}
+			const { changes } = updateSubmitted.run(findingId);
+			if (changes !== 1) {
+				throw new IllegalStatusTransition(`finding ${findingId} was not 'validated' at submission time`);
+			}
+			return requireFinding(findingId);
+		},
+		listByTarget(targetId) {
+			return selectByTarget.all(targetId) as unknown as FindingRow[];
+		},
+		countByStatus(targetId) {
+			const counts = { candidate: 0, validated: 0, submitted: 0, rejected: 0 };
+			for (const row of countStatus.all(targetId) as Array<{ status: string; c: number }>) {
+				if (row.status in counts) counts[row.status as keyof typeof counts] = row.c;
+			}
+			return counts;
 		},
 	};
 }

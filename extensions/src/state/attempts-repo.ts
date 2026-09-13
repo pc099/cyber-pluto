@@ -26,6 +26,9 @@ export interface AttemptsRepo {
 	/** The most recent commands for a target (newest first), for stuck
 	 * detection's rolling window (§10.5). */
 	recentCommandsByTarget(targetId: number, limit: number): string[];
+	/** The most recent full attempt rows for a target (newest first) — the
+	 * operator console's audit feed. */
+	recentByTarget(targetId: number, limit: number): AttemptRow[];
 }
 
 export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
@@ -42,6 +45,7 @@ export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
 	const recentByTargetStmt = db.prepare(
 		"SELECT command FROM attempts WHERE target_id = ? ORDER BY id DESC LIMIT ?",
 	);
+	const recentRowsStmt = db.prepare("SELECT * FROM attempts WHERE target_id = ? ORDER BY id DESC LIMIT ?");
 
 	return {
 		start(input) {
@@ -67,6 +71,9 @@ export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
 		},
 		recentCommandsByTarget(targetId, limit) {
 			return (recentByTargetStmt.all(targetId, limit) as Array<{ command: string }>).map((r) => r.command);
+		},
+		recentByTarget(targetId, limit) {
+			return recentRowsStmt.all(targetId, limit) as unknown as AttemptRow[];
 		},
 	};
 }

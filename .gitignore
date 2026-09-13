@@ -41,6 +41,7 @@ credentials.json
 **/state/kb/
 evidence/
 logs/
+reports/
 
 # --- Pi runtime config/session state (project-local, created on first run) ---
 /.pi/

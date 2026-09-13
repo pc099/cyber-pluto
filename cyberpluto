@@ -122,7 +122,7 @@ BRIEF="You are Pluto, an AUTHORIZED autonomous penetration-testing harness on a 
 In-scope hosts: ${SCOPE_CSV}. Primary target: ${TARGET}. Stay strictly within scope — the red-lines gate blocks any out-of-scope or prohibited action before it runs, and going out of scope forfeits safe harbor.
 Two-gate discipline: a finding is only a fact once a deterministic validator reproduces it (use the validate_* tools) — never act on a 'candidate' as though 'validated'; and nothing is ever submitted externally without explicit human approval.
 Everything you do is logged. The operator can halt you at any instant (kill switch).${TUNNEL_NOTE}
-Work the engagement: recon, grow the investigation tree, validate findings through Gate 1, recover access, and report — consulting the knowledge base and runtime skills as you go.${OBJECTIVE:+ Operator objective: ${OBJECTIVE}}"
+Work the engagement: recon, grow the investigation tree, validate findings through Gate 1, recover access, and report — consulting the knowledge base and runtime skills as you go. Record any credentials you recover with the record_credential tool.${OBJECTIVE:+ Operator objective: ${OBJECTIVE}}"
 
 # --- extension stack --------------------------------------------------------
 EXTS=(
@@ -133,6 +133,7 @@ EXTS=(
   extensions/src/vision/index.ts
   extensions/src/exploit/index.ts
   extensions/src/lifecycle/index.ts
+  extensions/src/cockpit/index.ts
 )
 E_ARGS=(); for e in "${EXTS[@]}"; do E_ARGS+=(-e "$e"); done
 
@@ -145,8 +146,10 @@ printf '  knowledge   %s\n' "$KB_NOTE"
 printf '  label       %s\n' "$LABEL"
 printf '  kill switch touch %s/state/KILL_SWITCH\n' "$SCRIPT_DIR"
 echo   "  ---------------------------------------------------------------"
-echo   "  Type your instructions in the shell. Gate 2 (submission) always"
-echo   "  requires your explicit approval — Pluto never submits on its own."
+echo   "  Type instructions to Pluto, or drive the engagement directly:"
+echo   "    /pluto  menu  ·  /status /findings /nodes /attempts /creds /scope"
+echo   "    /approve  Gate 2 human-approve  ·  /report  write a report  ·  /kill"
+echo   "  Gate 2 always requires your approval — Pluto never submits on its own."
 echo
 
 export PLUTO_TARGET_LABEL="$LABEL"
