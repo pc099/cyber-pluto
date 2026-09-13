@@ -1,8 +1,8 @@
-# --- Pi fork (nested clone of earendil-works/pi) ---
-# Left untracked deliberately: Session 1 decides how it's brought into this
-# repo (submodule vs. vendored fork) and forks it for real. Don't stage it
-# from Session 0.
-/pi/
+# --- Pi fork (pi/pi is a git submodule as of Session 1 — see .gitmodules) ---
+# The submodule itself is tracked via a gitlink + .gitmodules, not this
+# ignore file. Ignore only its build output.
+/pi/pi/node_modules/
+/pi/pi/**/dist/
 
 # --- TypeScript (extensions/) ---
 node_modules/
@@ -35,6 +35,10 @@ state/*.db
 state/*.sqlite
 state/*.sqlite3
 evidence/
+logs/
+
+# --- Pi runtime config/session state (project-local, created on first run) ---
+/.pi/
 
 # --- OS / editor ---
 .DS_Store
