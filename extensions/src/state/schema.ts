@@ -98,4 +98,24 @@ CREATE TABLE IF NOT EXISTS submissions (
   submitted_at   TEXT,
   platform_ref   TEXT
 );
+
+-- Vision-pipeline evidence (§2.3.1): headless-browser screenshots captured at
+-- exploitation-relevant moments, fed to Claude's vision and stored alongside
+-- findings. The image bytes are an evidence file; this row is the record.
+CREATE TABLE IF NOT EXISTS screenshots (
+  id          INTEGER PRIMARY KEY,
+  target_id   INTEGER NOT NULL REFERENCES targets(id),
+  node_id     INTEGER REFERENCES nodes(id),
+  finding_id  INTEGER REFERENCES findings(id),
+  url         TEXT,
+  trigger     TEXT NOT NULL DEFAULT 'manual',
+  path        TEXT NOT NULL,
+  sha256      TEXT,
+  width       INTEGER,
+  height      INTEGER,
+  note        TEXT,
+  captured_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_screenshots_target ON screenshots(target_id);
 `;

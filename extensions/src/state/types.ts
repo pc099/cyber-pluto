@@ -121,3 +121,29 @@ export interface SubmissionRow {
 	submitted_at: string | null;
 	platform_ref: string | null;
 }
+
+/** The moment a screenshot was captured (Architecture §2.3.1): after a payload
+ * is submitted, when a new page state loads, when a CAPTCHA is suspected, or an
+ * explicit manual capture. */
+export type ScreenshotTrigger = "payload_submit" | "new_page" | "captcha_suspected" | "manual";
+
+/**
+ * The vision-pipeline evidence type (Architecture §2.3.1) — a captured
+ * headless-browser screenshot, stored alongside findings. The image bytes live
+ * as an evidence file (`path`); the row is the queryable record. `sha256` gives
+ * exact-duplicate detection so the same view captured twice isn't re-analyzed.
+ */
+export interface ScreenshotRow {
+	id: number;
+	target_id: number;
+	node_id: number | null;
+	finding_id: number | null;
+	url: string | null;
+	trigger: ScreenshotTrigger;
+	path: string;
+	sha256: string | null;
+	width: number | null;
+	height: number | null;
+	note: string | null;
+	captured_at: string;
+}
