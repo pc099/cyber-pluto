@@ -9,7 +9,10 @@
 - **Next concrete action:** get an API key (or a completed `/login` OAuth) into Pi, then run the live smoke test: a real prompt through `pi` that issues `nmap -sV localhost` via the bash tool and reads the structured result back, with `logs/tool-invocations.jsonl` showing the full tool_call/tool_execution_end pair.
 
 ## In flight (granular — what is being done *right now*)
-- Waiting on the operator to choose how to authenticate Pi (API key vs. interactive OAuth login) — see Open questions below. Everything else in Session 1's scope is done; only the live end-to-end run remains.
+- Waiting on the operator to complete `pi`'s interactive `/login` (their choice, see Open questions below). While waiting, de-risked the parts of the live demo that don't need live credentials:
+  - Ran the exact target command standalone: `nmap -sV localhost` completes in ~0.6s and returns clean structured output (SSH 22, SMTP 25 with versions) — confirms the smoke-test prompt won't hang or need scan-tuning flags.
+  - Verified `extensions/src/tool-log/index.ts`'s actual logging behavior (not just that it typechecks/loads) with a standalone harness that calls the compiled extension's `tool_call`/`tool_execution_end` handlers directly with nmap-shaped synthetic events, bypassing the need for a live LLM turn. Confirmed `logs/tool-invocations.jsonl` gets both records, correctly correlated by `toolCallId`, with the full input and full result captured. Harness was throwaway (scratchpad, not committed) — the assertion is now recorded here instead.
+- Everything else in Session 1's scope is done and de-risked; only the actual live LLM-driven run remains, and that's blocked on credentials. Per CLAUDE.md/build-plan discipline ("don't build ahead of the current session," and Session 1's Done condition is specifically the live prompt-to-command-to-logged-result loop), **not** starting Session 2 until that live run completes — flagged to the operator rather than assumed.
 
 ## Done (most recent first — with commit hash)
 - `4cc442d` — Session 1: fork Pi in as a submodule, add tool-invocation logging.
