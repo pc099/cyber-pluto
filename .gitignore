@@ -31,8 +31,13 @@ credentials.json
 *credentials*.json
 
 # --- Pluto runtime state / evidence ---
-# The whole state dir is runtime data (SQLite db + WAL/shm sidecars).
+# The state dir is runtime data (SQLite db + WAL/shm sidecars). Ignore it at
+# the repo root and anywhere else a run's cwd might land it (e.g. extensions/),
+# but never the TypeScript source dir extensions/src/state/.
 /state/
+**/state/*.db
+**/state/*.db-*
+**/state/kb/
 evidence/
 logs/
 

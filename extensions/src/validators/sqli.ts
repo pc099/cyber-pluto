@@ -83,6 +83,7 @@ export interface VerifiableStep {
 }
 
 export interface SqliValidationReport {
+	validator: "sqli";
 	passed: boolean;
 	technicalSignal: { errorBased: boolean; booleanDifferential: boolean };
 	impactArtifact: { extracted: boolean; marker: string | null; unionColumns: number | null };
@@ -244,6 +245,7 @@ function finish(
 	},
 ): SqliValidationReport {
 	return {
+		validator: "sqli",
 		passed,
 		technicalSignal: { errorBased: flags.errorBased, booleanDifferential: flags.booleanDifferential },
 		impactArtifact: { extracted: flags.extracted, marker: flags.marker, unionColumns: flags.unionColumns },
