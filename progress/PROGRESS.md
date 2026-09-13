@@ -3,15 +3,22 @@
 **Resume protocol:** read this file top-to-bottom at the start of every session. It is the single source of truth for *where the build is right now*. Keep it current **as you work** — update it after every meaningful increment, not just at session end — so a usage-limit cutoff never loses more than the current small step.
 
 ## Current position
-- **Phase:** 4 — Prove It End to End — **COMPLETE**
-- **Active session:** Session 12 — HackTheBox dry run — done (via Cap-shaped local stand-in)
-- **Status:** **All 12 build-plan sessions are DONE.** Pluto ran end-to-end against a Cap-shaped local box: recon → tree → Gate 1 IDOR validation → foothold-credential recovery, clean audit trail, no gate bypassed.
-- **Next concrete action:** (build plan complete) Re-run Session 12 against the **real HTB Cap** once VPN connectivity is available — the free HTB VPN filters this VPS's datacenter IP (needs HTB VIP or a residential egress; see Open questions). Then start the post-plan backlog: wire the blind SQLi/SSRF TS validators onto the §4.7 OOB server, finish the remaining vuln-class validators (XXE, deserialization, auth, privesc) + skill-catalog entries, expand the KB beyond CISA KEV (WSTG/PentestMonkey/CAPEC ingesters + fastembed), and — importantly — **containerize Pluto** (it currently runs as root on the VPS; the architecture requires containerized isolation, and it's why the OS-level privesc step is circular today).
+- **Phase:** POST-PLAN — the 12-session build plan is COMPLETE; now building the operator harness interface (Camp-1, CAI-style) for heavy daily use.
+- **Active work:** `cyberpluto` operator launcher + console; bug-bounty rails.
+- **Status:** The harness is operable end to end via `./cyberpluto`. Build plan done; Session 12 proven on a Cap-shaped local box (real HTB Cap deferred — free VPN filters this datacenter IP).
+- **Next concrete action:** Re-run against **real HTB Cap** once VPN works (HTB VIP or a residential/tunnel egress — the operator plans reverse-SSH via their laptop's residential IP + `nmap -sT`). Post-plan backlog: **containerize Pluto** (runs as root on the VPS today — top hardening item, and why OS-level privesc is circular locally); wire the blind SQLi/SSRF TS validators onto the §4.7 OOB server; finish remaining vuln-class validators (XXE, deserialization, auth, privesc) + skill entries; KB beyond CISA KEV (WSTG/PentestMonkey/CAPEC + fastembed); a universal enforcing HTTP proxy for bug-bounty rate/header on bash tools (today briefed + enforced only on Pluto's own fetches).
 
 ## In flight (granular — what is being done *right now*)
-- (nothing — Session 12 closed out cleanly; the 12-session plan is complete)
+- (nothing — harness interface committed in iterations; see Done)
 
 ## Done (most recent first — with commit hash)
+- **Operator harness interface (post-plan, Camp-1 / CAI-style) — committed in iterations:**
+  - `90e8fcf` docs: README rewritten to a current operator guide (run `cyberpluto`, console command table, two gates, layout); `scope.example.yaml` template (real `scope.yaml` gitignored).
+  - `7414d30` **bug-bounty HTTP compliance**: `extensions/src/shared/http-policy.ts` `politeFetch` injects the program traffic-ID header (`PLUTO_TRAFFIC_ID`) + rate-limits (`PLUTO_RATE_LIMIT`); all Gate 1 validator fetches route through it. Launcher `--program/--traffic-id/--rate` + a bug-bounty compliance briefing. Verified: header on every request + paced.
+  - `71181bb` **operator console (`extensions/src/cockpit/`)**: live status widget + `/status /findings(drill-in) /nodes /attempts /creds /scope /kill /approve /report /pluto`, a `record_credential` tool, and **Gate 2** by construction (`/approve` is operator-only → `submissions` row naming the approver → finding `submitted`; Pluto never auto-submits). `/report` writes a Markdown finding report from Gate 1 evidence. New credentials/submissions repos + findings `markSubmitted`/`listByTarget`/`countByStatus` + node/attempt/validation list queries. Harness-verified full arc; 32/32 tests.
+  - `93a4d0a` fixes on first real launch: a `set -e` trap that killed `cyberpluto` when no objective was given (command-substitution in an assignment), and a YAML colon in the `rce-command-injection` skill description that stopped it loading.
+  - `6cd1193` `cyberpluto` launcher: banner + engagement summary, scope-as-a-list pinned before launch, full stack + runtime skills, lifecycle caps, `--tunnel`/`--dry-run`, engagement briefing; interactive Pi shell (tmux for persistence — no daemon).
+- **Build plan (Sessions 0–12):**
 - `1a0c13b` — **Session 12: end-to-end dry run on a Cap-shaped local box (+ IDOR validator).** The build-plan finale.
   - Real HTB **Cap** (10.129.90.219) was activated but is **unreachable from this VPS** — HTB's free VPN IP-filters this datacenter host (TCP 443 SYNs dropped; UDP 1337 reaches the server but TLS never completes; identical with tls-auth and tls-crypt → not a config issue). Needs HTB VIP or a residential egress; deferred. (`.ovpn` saved at `/root/htb.ovpn`, gitignored.)
   - Built `lab/cap-clone/app.mjs` — a Cap-shaped intentionally-vulnerable box (127.0.0.1): a capture dashboard with a session-scoped numeric snapshot id and `/data/<id>` that doesn't check ownership (IDOR); id 0's pcap (valid inline libpcap) carries a plaintext FTP login (the foothold). Session required (401 otherwise) so it's real broken access control.
