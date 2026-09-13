@@ -22,6 +22,7 @@ import { openStateDb } from "./db.js";
 import { type FindingsRepo, createFindingsRepo } from "./findings-repo.js";
 import { type NodesRepo, createNodesRepo } from "./nodes-repo.js";
 import { type TargetsRepo, createTargetsRepo } from "./targets-repo.js";
+import { type ValidationsRepo, createValidationsRepo } from "./validations-repo.js";
 
 export interface Engagement {
 	db: DatabaseSync;
@@ -32,6 +33,7 @@ export interface Engagement {
 		nodes: NodesRepo;
 		attempts: AttemptsRepo;
 		findings: FindingsRepo;
+		validations: ValidationsRepo;
 	};
 }
 
@@ -48,6 +50,7 @@ export function startEngagement(cwd: string): Engagement {
 		nodes: createNodesRepo(db),
 		attempts: createAttemptsRepo(db),
 		findings: createFindingsRepo(db),
+		validations: createValidationsRepo(db),
 	};
 
 	const label = process.env["PLUTO_TARGET_LABEL"] ?? "ad-hoc";

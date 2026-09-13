@@ -31,9 +31,8 @@ credentials.json
 *credentials*.json
 
 # --- Pluto runtime state / evidence ---
-state/*.db
-state/*.sqlite
-state/*.sqlite3
+# The whole state dir is runtime data (SQLite db + WAL/shm sidecars).
+/state/
 evidence/
 logs/
 
