@@ -25,6 +25,7 @@ import type {
 	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { queryKb } from "../kb-bridge/index.js";
 import { parseBaseTool } from "../shared/bash-command.js";
 import { getEngagement, startEngagement } from "../state/engagement.js";
 import type { NodeRow } from "../state/types.js";
@@ -34,6 +35,15 @@ import { checklistForService } from "./service-checklist.js";
 const INVESTIGATE_PORT_PRIORITY = 5;
 const CHECK_FIRST_PRIORITY = 10;
 const CVE_PATH_PRIORITY = 1;
+/** A KB/KEV hit is high-signal — this exact product is known-exploited in the
+ * wild (§2.5) — so its node outranks even the cheap-win checks (§5.1). The
+ * reasoning core still sees the whole priority-ordered tree and chooses; this
+ * is a strong hint, not a forced order. */
+const KB_HIT_PRIORITY = 12;
+/** Cap how many KB hits become nodes, and how weak a hit may be, so lexical
+ * retrieval noise doesn't flood the tree. */
+const KB_HIT_LIMIT = 3;
+const KB_HIT_MIN_SCORE = 0.25;
 
 /** Fingerprint-only confidence: a banner/version string is a candidate
  * lead, never proof (backporting makes version strings unreliable —
@@ -57,7 +67,7 @@ function extractResultText(result: unknown): string {
 		.join("\n");
 }
 
-function growTreeFromNmapOutput(output: string): void {
+async function growTreeFromNmapOutput(cwd: string, output: string): Promise<void> {
 	const engagement = getEngagement();
 	if (!engagement) {
 		return;
@@ -88,6 +98,9 @@ function growTreeFromNmapOutput(output: string): void {
 			priority: CVE_PATH_PRIORITY,
 		});
 
+		// The fingerprint write (§2.5): this is the moment a service version is
+		// recorded, and the moment that should actively trigger a KB query which
+		// can spawn a prioritized child node.
 		engagement.repos.findings.create({
 			targetId: engagement.targetId,
 			nodeId: portNode.id,
@@ -97,6 +110,35 @@ function growTreeFromNmapOutput(output: string): void {
 			product: svc.product,
 			version: svc.version,
 			confidence: FINGERPRINT_CONFIDENCE,
+		});
+
+		await spawnKbHitNodes(cwd, portNode.id, svc);
+	}
+}
+
+async function spawnKbHitNodes(
+	cwd: string,
+	portNodeId: number,
+	svc: { product: string | null; version: string | null; service: string },
+): Promise<void> {
+	const engagement = getEngagement();
+	if (!engagement) {
+		return;
+	}
+	const hits = await queryKb(
+		cwd,
+		{ product: svc.product, version: svc.version, service: svc.service },
+		{ limit: KB_HIT_LIMIT, minScore: KB_HIT_MIN_SCORE },
+	);
+	for (const hit of hits) {
+		const label =
+			`KB/KEV ${hit.cve ?? hit.id} — ${[hit.vendor, hit.product].filter(Boolean).join(" ")}: ${hit.title ?? ""}`.trim();
+		engagement.repos.nodes.create({
+			targetId: engagement.targetId,
+			parentId: portNodeId,
+			nodeType: "vuln_hypothesis",
+			label: `${label} (score ${hit.score.toFixed(2)})`,
+			priority: KB_HIT_PRIORITY,
 		});
 	}
 }
@@ -116,7 +158,7 @@ export default function reconExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_execution_end", (event: ToolExecutionEndEvent) => {
+	pi.on("tool_execution_end", async (event: ToolExecutionEndEvent, ctx: ExtensionContext) => {
 		const command = pendingBashCommands.get(event.toolCallId);
 		pendingBashCommands.delete(event.toolCallId);
 		if (event.isError || !command) {
@@ -125,7 +167,7 @@ export default function reconExtension(pi: ExtensionAPI): void {
 		if (parseBaseTool(command) !== "nmap") {
 			return;
 		}
-		growTreeFromNmapOutput(extractResultText(event.result));
+		await growTreeFromNmapOutput(ctx.cwd, extractResultText(event.result));
 	});
 
 	pi.registerTool({
