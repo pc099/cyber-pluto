@@ -41,6 +41,7 @@ you type instructions — or drive the engagement directly with the **console**:
 | `/scope` | in-scope hosts |
 | `/approve` | **Gate 2** — human-approve a validated finding for submission |
 | `/report` | write a Markdown report for a finding |
+| `/resume` | clear an environmental pause and continue |
 | `/kill` | engage the kill switch (halt now) |
 
 `!cmd` runs raw bash; `touch state/KILL_SWITCH` halts from any pane.

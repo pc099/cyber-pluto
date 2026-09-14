@@ -17,7 +17,8 @@
  *     Chaitanya. A bypass/evasion mutation is a DIFFERENT call, so it reads as
  *     progress, not repetition (§6.5.2).
  */
-import { appendFile, mkdir } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
 	ExtensionAPI,
@@ -44,14 +45,17 @@ function config() {
 		stuckRepeatThreshold: num("PLUTO_STUCK_REPEAT", 3),
 		stuckWindow: num("PLUTO_STUCK_WINDOW", 8),
 		stuckEscalateAfter: num("PLUTO_STUCK_ESCALATE", 2),
-		unhealthyThreshold: num("PLUTO_UNHEALTHY_THRESHOLD", 1),
+		// Require several CONSECUTIVE unhealthy target responses before pausing,
+		// so a single expected blip (one 'connection refused' while testing, a
+		// skill file that mentions 'captcha') never pauses the whole engagement.
+		unhealthyThreshold: num("PLUTO_UNHEALTHY_THRESHOLD", 3),
 	};
 }
 
+const PAUSE_FILE = "state/PAUSED";
+
 // In-process lifecycle state for the current run.
 const state = {
-	paused: false,
-	pauseSignal: "",
 	unhealthyHits: 0,
 	stuckHits: 0,
 	nodeCountHistory: [] as number[],
@@ -105,10 +109,18 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		}
 
 		// 2. Environmental pause — target is the problem; flag for review.
-		if (state.paused) {
+		// File-based (like the kill switch) so it survives across extension
+		// realms and the operator can clear it with /resume.
+		if (existsSync(join(ctx.cwd, PAUSE_FILE))) {
+			let reason = "target-health signal";
+			try {
+				reason = readFileSync(join(ctx.cwd, PAUSE_FILE), "utf8").trim() || reason;
+			} catch {
+				// keep default
+			}
 			return {
 				block: true,
-				reason: `Engagement paused — target-health signal '${state.pauseSignal}' (§10.5). Flagged for review; not burning budget against an untestable target.`,
+				reason: `Engagement PAUSED — ${reason} (§10.5). Flagged for review; not burning budget against an untestable target. The operator can resume with /resume.`,
 			};
 		}
 
@@ -139,17 +151,33 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_execution_end", async (event: ToolExecutionEndEvent, ctx: ExtensionContext) => {
-		if (state.paused) return;
-		const text = extractText(event.result);
-		const signal = detectUnhealthy(text);
-		if (signal) {
-			state.unhealthyHits += 1;
-			if (state.unhealthyHits >= config().unhealthyThreshold) {
-				state.paused = true;
-				state.pauseSignal = signal;
-				await logEvent(ctx.cwd, { kind: "environmental_pause", signal, hits: state.unhealthyHits });
-				console.error(`[pluto/lifecycle] ENGAGEMENT PAUSED — target-health signal '${signal}'`);
+		// Only judge TARGET health from the vector that actually hits the target
+		// (shell tools). File reads, edits, and Pluto's own custom tools must not
+		// count — that is what caused false pauses (a skill file mentioning
+		// 'captcha', a validator's own probe). Ignore an errored call too: an
+		// expected failure (a closed port, a refused test connection) is not the
+		// target being unhealthy.
+		if (event.toolName !== "bash" && event.toolName !== "powershell") return;
+		if (event.isError) return;
+		if (existsSync(join(ctx.cwd, PAUSE_FILE))) return;
+
+		const signal = detectUnhealthy(extractText(event.result));
+		if (!signal) {
+			state.unhealthyHits = 0; // a healthy target response resets the streak
+			return;
+		}
+		state.unhealthyHits += 1;
+		if (state.unhealthyHits >= config().unhealthyThreshold) {
+			const reason = `target-health signal '${signal}' on ${state.unhealthyHits} consecutive responses`;
+			try {
+				await mkdir(join(ctx.cwd, "state"), { recursive: true });
+				await writeFile(join(ctx.cwd, PAUSE_FILE), reason, "utf8");
+			} catch (err) {
+				console.error("[pluto/lifecycle] failed to write pause file:", err);
 			}
+			state.unhealthyHits = 0;
+			await logEvent(ctx.cwd, { kind: "environmental_pause", signal, reason });
+			console.error(`[pluto/lifecycle] ENGAGEMENT PAUSED — ${reason}. Operator: /resume to continue.`);
 		}
 	});
 }
