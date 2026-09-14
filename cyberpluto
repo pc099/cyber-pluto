@@ -37,7 +37,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PROVIDER="openai-codex"   # default: the operator's ChatGPT (Codex) subscription
+# Default to Anthropic: OpenAI's ChatGPT/Codex subscription server-side-refuses
+# offensive-exploit content ("flagged for possible cybersecurity risk"; needs
+# their Trusted Access for Cyber program), which blocks Pluto's actual job.
+# Claude supports authorized security testing (CTF/HTB). openai-codex is still
+# selectable with --provider for recon or once Trusted Access is granted.
+PROVIDER="anthropic"
 MODEL=""                  # empty → use the provider's default model (Pi picks)
 MAX_CALLS=200
 MAX_WALL=3600

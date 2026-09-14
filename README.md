@@ -72,6 +72,13 @@ provider **once** before launching (credentials are stored by Pi, in `~/.pi`):
 > raw `OPENAI_API_KEY` is separate metered billing. Pick `openai-codex` to spend
 > the subscription.
 
+> **Codex refuses offensive-exploit work.** OpenAI's ChatGPT/Codex backend
+> server-side-flags exploitation content ("flagged for possible cybersecurity
+> risk") and stops — it needs their *Trusted Access for Cyber* program
+> (`chatgpt.com/cyber`). Until you have that, `openai-codex` is only usable for
+> recon/analysis, not the actual exploitation Pluto exists to do. **Anthropic is
+> the default** because Claude supports authorized security testing (CTF/HTB).
+
 To make a provider the permanent default, change `PROVIDER=` (and `MODEL=`) at
 the top of the `cyberpluto` script.
 
