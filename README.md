@@ -46,6 +46,35 @@ you type instructions — or drive the engagement directly with the **console**:
 
 `!cmd` runs raw bash; `touch state/KILL_SWITCH` halts from any pane.
 
+## Choosing the provider / model
+
+Pluto's reasoning core is any model Pi supports. The launcher defaults to
+Anthropic Claude Haiku; switch with `--provider` (and optionally `--model`):
+
+```bash
+./cyberpluto <target>                                   # default: anthropic / claude-haiku-4-5
+./cyberpluto <target> --provider openai-codex           # ChatGPT subscription (Codex OAuth), gpt-5.5
+./cyberpluto <target> --provider openai --model gpt-5.5 # OpenAI API key (metered), pinned model
+./cyberpluto <target> --model claude-opus-4-8           # a heavier Anthropic model
+```
+
+Leaving `--model` off makes Pi pick that provider's default. Authenticate the
+provider **once** before launching (credentials are stored by Pi, in `~/.pi`):
+
+| provider | how to authenticate | billing |
+|---|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` env, or `pi ... /login` | Claude API (metered) or Claude subscription |
+| `openai-codex` | run Pi once, `/login`, sign in with **ChatGPT** | your **ChatGPT** Plus/Pro plan (Codex limits) |
+| `openai` | `OPENAI_API_KEY` env | OpenAI API (pay-as-you-go — *not* the ChatGPT plan) |
+
+> A ChatGPT **subscription** and an OpenAI **API key** are different things: the
+> subscription bills through `--provider openai-codex` (sign in with ChatGPT); a
+> raw `OPENAI_API_KEY` is separate metered billing. Pick `openai-codex` to spend
+> the subscription.
+
+To make a provider the permanent default, change `PROVIDER=` (and `MODEL=`) at
+the top of the `cyberpluto` script.
+
 ## The two gates (non-negotiable)
 
 1. **Gate 1** — a finding only reaches `validated` when a deterministic,

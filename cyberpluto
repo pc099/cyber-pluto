@@ -17,7 +17,9 @@
 # Options:
 #   --scope LIST        Comma/space list of in-scope hosts/IPs (adds to TARGET)
 #   --scope-file FILE   Read in-scope hosts from a file (one per line, or YAML-ish)
-#   --model NAME        Reasoning model (default: claude-haiku-4-5)
+#   --provider NAME     LLM provider (default: anthropic; e.g. openai, openai-codex)
+#   --model NAME        Reasoning model (default: claude-haiku-4-5 on anthropic,
+#                       otherwise the provider's own default, e.g. gpt-5.5)
 #   --max-calls N       Hard cap on tool calls this engagement (default: 200)
 #   --max-wall SECONDS  Hard cap on wall-clock seconds (default: 3600)
 #   --label NAME        Engagement label (default: derived from target)
@@ -33,7 +35,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-MODEL="claude-haiku-4-5"
+PROVIDER="anthropic"
+MODEL=""          # empty → use the provider's default model (Pi picks)
 MAX_CALLS=200
 MAX_WALL=3600
 SCOPE=""
@@ -53,6 +56,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --scope)      SCOPE="$2"; shift 2 ;;
     --scope-file) SCOPE_FILE="$2"; shift 2 ;;
+    --provider)   PROVIDER="$2"; shift 2 ;;
     --model)      MODEL="$2"; shift 2 ;;
     --max-calls)  MAX_CALLS="$2"; shift 2 ;;
     --max-wall)   MAX_WALL="$2"; shift 2 ;;
@@ -105,6 +109,9 @@ if [[ ${#SCOPE_HOSTS[@]} -eq 0 ]]; then
   [[ -n "$TARGET" ]] || { echo "a target is required." >&2; exit 1; }
   SCOPE_HOSTS+=("$TARGET")
 fi
+# Preserve the historical default (Haiku) for Anthropic; for any other provider
+# leave MODEL empty so Pi selects that provider's own default model.
+[[ -z "$MODEL" && "$PROVIDER" == "anthropic" ]] && MODEL="claude-haiku-4-5"
 [[ -z "$TARGET" ]] && TARGET="${SCOPE_HOSTS[0]}"
 [[ -z "$LABEL" ]] && LABEL="engagement-$(echo "$TARGET" | tr -c 'a-zA-Z0-9' '-' | sed 's/-*$//')"
 
@@ -158,7 +165,8 @@ E_ARGS=(); for e in "${EXTS[@]}"; do E_ARGS+=(-e "$e"); done
 # --- summary ----------------------------------------------------------------
 printf '  target      %s  (%s)\n' "$TARGET" "$REACH"
 printf '  scope       %s\n' "$SCOPE_CSV"
-printf '  model       %s\n' "$MODEL"
+printf '  provider    %s\n' "$PROVIDER"
+printf '  model       %s\n' "${MODEL:-(provider default)}"
 printf '  caps        %s tool-calls · %ss wall-clock\n' "$MAX_CALLS" "$MAX_WALL"
 printf '  knowledge   %s\n' "$KB_NOTE"
 printf '  label       %s\n' "$LABEL"
@@ -189,9 +197,11 @@ true  # keep set -e happy after the conditional exports
 # -nc: do NOT load this repo's CLAUDE.md/AGENTS.md — that's Pluto's *build*
 # doctrine ("you are building Pluto"), which must not bleed into an engagement.
 # Pluto's operating instructions come from the --append-system-prompt briefing.
-LAUNCH=( node "$PI_CLI" --provider anthropic --model "$MODEL" --no-context-files
+LAUNCH=( node "$PI_CLI" --provider "$PROVIDER" --no-context-files
          --skill runtime-skills "${E_ARGS[@]}"
          --append-system-prompt "$BRIEF" )
+# Only pin a model when one is set; otherwise Pi uses the provider default.
+[[ -n "$MODEL" ]] && LAUNCH+=(--model "$MODEL")
 
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "[dry-run] env: PLUTO_TARGET_HOST=$PLUTO_TARGET_HOST PLUTO_SCOPE_HOSTS=$PLUTO_SCOPE_HOSTS PLUTO_MAX_TOOL_CALLS=$PLUTO_MAX_TOOL_CALLS"
