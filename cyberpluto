@@ -20,8 +20,10 @@
 #   --provider NAME     LLM provider (default: anthropic; e.g. openai, openai-codex)
 #   --model NAME        Reasoning model (default: claude-haiku-4-5 on anthropic,
 #                       otherwise the provider's own default, e.g. gpt-5.5)
-#   --max-calls N       Hard cap on tool calls this engagement (default: 200)
-#   --max-wall SECONDS  Hard cap on wall-clock seconds (default: 3600)
+#   --max-calls N       Hard cap on tool calls this engagement (default: 200; 0=unlimited)
+#   --max-wall SECONDS  Hard cap on wall-clock seconds (default: 3600; 0=unlimited)
+#   --no-cap            Remove both hard caps (unlimited) — stuck-detection and
+#                       the kill switch remain the safeguards (use on a subscription)
 #   --label NAME        Engagement label (default: derived from target)
 #   --tunnel            Brief Pluto to use `nmap -sT` (TCP connect over a tunnel)
 #   --program NAME      Bug-bounty program handle (recorded on submissions)
@@ -35,8 +37,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PROVIDER="anthropic"
-MODEL=""          # empty → use the provider's default model (Pi picks)
+PROVIDER="openai-codex"   # default: the operator's ChatGPT (Codex) subscription
+MODEL=""                  # empty → use the provider's default model (Pi picks)
 MAX_CALLS=200
 MAX_WALL=3600
 SCOPE=""
@@ -60,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --model)      MODEL="$2"; shift 2 ;;
     --max-calls)  MAX_CALLS="$2"; shift 2 ;;
     --max-wall)   MAX_WALL="$2"; shift 2 ;;
+    --no-cap)     MAX_CALLS=0; MAX_WALL=0; shift ;;
     --label)      LABEL="$2"; shift 2 ;;
     --program)    PROGRAM="$2"; shift 2 ;;
     --traffic-id) TRAFFIC_ID="$2"; shift 2 ;;
@@ -167,7 +170,9 @@ printf '  target      %s  (%s)\n' "$TARGET" "$REACH"
 printf '  scope       %s\n' "$SCOPE_CSV"
 printf '  provider    %s\n' "$PROVIDER"
 printf '  model       %s\n' "${MODEL:-(provider default)}"
-printf '  caps        %s tool-calls · %ss wall-clock\n' "$MAX_CALLS" "$MAX_WALL"
+CALLS_LABEL="$MAX_CALLS tool-calls"; [[ "$MAX_CALLS" == 0 ]] && CALLS_LABEL="unlimited tool-calls"
+WALL_LABEL="${MAX_WALL}s wall-clock";  [[ "$MAX_WALL" == 0 ]] && WALL_LABEL="unlimited wall-clock"
+printf '  caps        %s · %s\n' "$CALLS_LABEL" "$WALL_LABEL"
 printf '  knowledge   %s\n' "$KB_NOTE"
 printf '  label       %s\n' "$LABEL"
 [[ -n "$PROGRAM$TRAFFIC_ID$RATE" ]] && printf '  bug-bounty  program=%s · traffic-id=%s · rate=%s\n' "${PROGRAM:-–}" "${TRAFFIC_ID:-–}" "${RATE:-unset}"

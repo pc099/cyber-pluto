@@ -38,10 +38,21 @@ function num(env: string, dflt: number): number {
 	return Number.isFinite(v) && v > 0 ? v : dflt;
 }
 
+/** Like num(), but a hard cap can be *disabled*: 0 / "none" / "unlimited" /
+ * "off" means no cap (Infinity), which checkHardCaps' `>=` never trips. Used
+ * for the two hard caps so an operator on a flat-rate subscription can run
+ * uncapped (stuck-detection + the kill switch remain the real safeguards). */
+function capNum(env: string, dflt: number): number {
+	const raw = (process.env[env] ?? "").trim().toLowerCase();
+	if (raw === "0" || raw === "none" || raw === "unlimited" || raw === "off") return Number.POSITIVE_INFINITY;
+	const v = Number(raw);
+	return Number.isFinite(v) && v > 0 ? v : dflt;
+}
+
 function config() {
 	return {
-		maxToolCalls: num("PLUTO_MAX_TOOL_CALLS", 200),
-		maxWallClockSeconds: num("PLUTO_MAX_WALLCLOCK_S", 3600),
+		maxToolCalls: capNum("PLUTO_MAX_TOOL_CALLS", 200),
+		maxWallClockSeconds: capNum("PLUTO_MAX_WALLCLOCK_S", 3600),
 		stuckRepeatThreshold: num("PLUTO_STUCK_REPEAT", 3),
 		stuckWindow: num("PLUTO_STUCK_WINDOW", 8),
 		stuckEscalateAfter: num("PLUTO_STUCK_ESCALATE", 2),
