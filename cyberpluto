@@ -112,6 +112,11 @@ fi
 SCOPE_CSV="$(printf '%s\n' "${SCOPE_HOSTS[@]}" | awk 'NF && !seen[$0]++' | paste -sd, -)"
 
 # --- pre-flight -------------------------------------------------------------
+PI_CLI="pi/pi/packages/coding-agent/dist/bundle/cli.js"
+if [[ ! -f "$PI_CLI" ]]; then
+  echo "Pi is not built. Run: cd pi/pi && npm install --ignore-scripts && npm run build" >&2
+  exit 1
+fi
 if [[ ! -f extensions/dist/tool-log/index.js ]]; then
   echo "[cyberpluto] building extensions…"
   ( cd extensions && npm run build >/dev/null 2>&1 ) || { echo "extension build failed — run 'cd extensions && npm run build'." >&2; exit 1; }
@@ -178,7 +183,10 @@ export PLUTO_SUBAGENT_MODEL="$MODEL"
 [[ -n "$RATE" ]]       && export PLUTO_RATE_LIMIT="$RATE"
 true  # keep set -e happy after the conditional exports
 
-LAUNCH=( ./pi/pi/pi-test.sh --provider anthropic --model "$MODEL"
+# Use the BUILT bundle CLI (not pi-test.sh/tsx-from-source): far lower memory
+# and faster startup — important on a small VPS (the tsx path OOM'd the 4GB box
+# with the full stack loaded).
+LAUNCH=( node "$PI_CLI" --provider anthropic --model "$MODEL"
          --skill runtime-skills "${E_ARGS[@]}"
          --append-system-prompt "$BRIEF" )
 
