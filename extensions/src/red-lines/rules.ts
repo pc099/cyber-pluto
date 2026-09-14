@@ -63,13 +63,27 @@ function validIpv4(candidate: string): boolean {
 	return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
 }
 
+/** A host token only means something to a static scope check if it is a clean
+ * literal. Shell variables (`$VAR`, `${VAR}`), command substitution (`` `…` ``,
+ * `$(…)`) and globs mean the real host is only known once the shell expands it,
+ * so keep the literal prefix and drop the rest: `10.129.2.155$path` scope-checks
+ * as `10.129.2.155` (its in-scope base), and a token that *starts* with a
+ * variable (`${TARGET}`) yields nothing to check rather than a bogus host that
+ * would falsely block a legitimate recon loop. */
+export function literalHostPrefix(host: string): string | null {
+	const cut = host.search(/[$`(){}*?\\]/);
+	const literal = (cut === -1 ? host : host.slice(0, cut)).trim();
+	return literal.length > 0 ? literal : null;
+}
+
 /** Extract candidate target hosts (IPv4 + URL hostnames) from command text. */
 export function extractHosts(text: string): string[] {
 	const hosts = new Set<string>();
 
 	for (const m of text.matchAll(/https?:\/\/[^\s'"`|<>]+/gi)) {
 		try {
-			hosts.add(new URL(m[0]).hostname);
+			const h = literalHostPrefix(new URL(m[0]).hostname);
+			if (h) hosts.add(h);
 		} catch {
 			// not a parseable URL; ignore
 		}
@@ -80,6 +94,24 @@ export function extractHosts(text: string): string[] {
 		}
 	}
 	return [...hosts];
+}
+
+/** Expand scope to include vhosts. A hostname that `/etc/hosts` maps to an
+ * already-in-scope IP is itself in scope — a virtual host is only a `Host:`
+ * header sent to the very same in-scope machine, never a different target. So
+ * once recon adds `10.129.2.155 management.htb` (the standard HTB workflow),
+ * requests to `management.htb` must not be blocked as out-of-scope. Only names
+ * pointing at an in-scope IP are added; a name mapping to any other IP is left
+ * out, so this never widens scope to a different host. Pure: takes the file
+ * content so it is unit-testable without touching the filesystem. */
+export function resolveVhosts(hosts: Set<string>, etcHostsContent: string): void {
+	for (const raw of etcHostsContent.split("\n")) {
+		const line = raw.replace(/#.*$/, "").trim();
+		if (!line) continue;
+		const [ip, ...names] = line.split(/\s+/);
+		if (!ip || !hosts.has(normalizeHost(ip))) continue; // only vhosts on an in-scope IP
+		for (const n of names) hosts.add(normalizeHost(n));
+	}
 }
 
 /** Parse an allowlist of hosts/IPs out of free-text scope notes or a

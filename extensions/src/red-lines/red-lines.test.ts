@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { checkRedLines, toInvocation } from "./check.js";
-import { extractHosts, normalizeHost, parseScopeHosts } from "./rules.js";
+import { extractHosts, normalizeHost, parseScopeHosts, resolveVhosts } from "./rules.js";
 
 const IN_SCOPE = new Set(["localhost", "10.0.0.5"]);
 const ctx = { scopeHosts: IN_SCOPE };
@@ -82,6 +82,33 @@ test("host extraction and scope normalization", () => {
 	assert.equal(normalizeHost("127.0.0.1"), "localhost");
 	assert.equal(normalizeHost("LOCALHOST"), "localhost");
 	assert.ok(parseScopeHosts("in-scope: 10.0.0.5, example.com; localhost").includes("10.0.0.5"));
+});
+
+test("a shell variable in a URL does not manufacture a bogus out-of-scope host", () => {
+	// Regression: `curl https://10.0.0.5$path` used to extract the host
+	// `10.0.0.5$path` and (falsely) trip the scope rule, forcing the agent off
+	// efficient recon loops. The literal in-scope base must be what's checked.
+	assert.deepEqual(extractHosts("curl -k https://10.0.0.5$path/api"), ["10.0.0.5"]);
+	assert.deepEqual(extractHosts("curl https://10.0.0.5/a$endpoint"), ["10.0.0.5"]);
+	const decision = checkRedLines(bash("for p in /a /b; do curl -k https://10.0.0.5$p; done"), ctx);
+	assert.deepEqual(decision, { allowed: true });
+});
+
+test("a URL whose host is entirely a variable yields nothing to enforce (no false block)", () => {
+	// `${TARGET}` is only known at runtime; a static check must not invent a host.
+	assert.deepEqual(extractHosts("curl https://${TARGET}/x"), []);
+	assert.deepEqual(checkRedLines(bash("curl https://$T/x"), ctx), { allowed: true });
+});
+
+test("resolveVhosts folds in only names that /etc/hosts maps to an in-scope IP", () => {
+	const hosts = new Set(["10.0.0.5"]);
+	resolveVhosts(
+		hosts,
+		"127.0.0.1 localhost\n10.0.0.5 management.htb app.management.htb  # added by recon\n9.9.9.9 evil.example\n",
+	);
+	assert.ok(hosts.has("management.htb"), "vhost on the in-scope IP is in scope");
+	assert.ok(hosts.has("app.management.htb"), "all names on the in-scope line are in scope");
+	assert.ok(!hosts.has("evil.example"), "a name on an OUT-of-scope IP is NOT added");
 });
 
 // --- enforcement hook (the choke point) ---------------------------------

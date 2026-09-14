@@ -21,6 +21,7 @@
  * false block just routes to Chaitanya for approval (§10.4's model); a missed
  * block means a prohibited action ran.
  */
+import { readFileSync } from "node:fs";
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -33,7 +34,7 @@ import type {
 import { checkRedLines, toInvocation } from "./check.js";
 import { isKillSwitchEngaged, killSwitchPath } from "./kill-switch.js";
 import { getEngagement, startEngagement } from "../state/engagement.js";
-import { normalizeHost, parseScopeHosts } from "./rules.js";
+import { normalizeHost, parseScopeHosts, resolveVhosts } from "./rules.js";
 
 const LOG_DIR = "logs";
 const LOG_FILE = "red-lines.jsonl";
@@ -50,6 +51,15 @@ function resolveScopeHosts(): Set<string> {
 		for (const h of parseScopeHosts(target?.scope_notes)) hosts.add(h);
 	}
 	for (const h of parseScopeHosts(process.env["PLUTO_SCOPE_HOSTS"])) hosts.add(h);
+	// Fold in vhosts that /etc/hosts maps to an already-in-scope IP (recon adds
+	// these during an engagement), so a discovered `management.htb → <in-scope IP>`
+	// is not blocked. Read fresh each call — this is why scope is resolved per
+	// tool-call, not just at session start (a vhost added after start still counts).
+	try {
+		resolveVhosts(hosts, readFileSync("/etc/hosts", "utf8"));
+	} catch {
+		// no /etc/hosts (e.g. non-Linux); nothing to fold in
+	}
 	return hosts;
 }
 
@@ -84,10 +94,10 @@ export default function redLinesExtension(pi: ExtensionAPI): void {
 			return { block: true, reason, terminate: true };
 		}
 
-		// 2. Red-lines rules (§10.4).
-		if (!scopeHosts) {
-			scopeHosts = resolveScopeHosts();
-		}
+		// 2. Red-lines rules (§10.4). Resolve scope fresh each call so a vhost
+		// added to /etc/hosts mid-engagement (pointing at an in-scope IP) is
+		// honored; the base cost is a single indexed row + a tiny file read.
+		scopeHosts = resolveScopeHosts();
 		const inv = toInvocation(event.toolName, event.input);
 		const decision = checkRedLines(inv, { scopeHosts });
 		if (!decision.allowed) {
