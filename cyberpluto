@@ -186,7 +186,10 @@ true  # keep set -e happy after the conditional exports
 # Use the BUILT bundle CLI (not pi-test.sh/tsx-from-source): far lower memory
 # and faster startup — important on a small VPS (the tsx path OOM'd the 4GB box
 # with the full stack loaded).
-LAUNCH=( node "$PI_CLI" --provider anthropic --model "$MODEL"
+# -nc: do NOT load this repo's CLAUDE.md/AGENTS.md — that's Pluto's *build*
+# doctrine ("you are building Pluto"), which must not bleed into an engagement.
+# Pluto's operating instructions come from the --append-system-prompt briefing.
+LAUNCH=( node "$PI_CLI" --provider anthropic --model "$MODEL" --no-context-files
          --skill runtime-skills "${E_ARGS[@]}"
          --append-system-prompt "$BRIEF" )
 
