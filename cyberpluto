@@ -20,6 +20,9 @@
 #   --provider NAME     LLM provider (default: anthropic; e.g. openai, openai-codex)
 #   --model NAME        Reasoning model (default: claude-haiku-4-5 on anthropic,
 #                       otherwise the provider's own default, e.g. gpt-5.5)
+#   --attack-provider P Provider for the EXPLOITATION phase sub-agent (phase routing) —
+#                       e.g. a free-tier open model (groq) or a local one (llama.cpp)
+#   --attack-model NAME Model for the exploitation phase (defaults to the main model)
 #   --max-calls N       Hard cap on tool calls this engagement (default: 200; 0=unlimited)
 #   --max-wall SECONDS  Hard cap on wall-clock seconds (default: 3600; 0=unlimited)
 #   --no-cap            Remove both hard caps (unlimited) — stuck-detection and
@@ -55,6 +58,8 @@ DRY_RUN=0
 PROGRAM=""
 TRAFFIC_ID=""
 RATE=""
+ATTACK_PROVIDER=""   # phase routing: the exploitation ("attack surface") sub-agent
+ATTACK_MODEL=""      #   e.g. a free-tier open model (groq/cerebras) or a local one
 OBJECTIVE_PARTS=()
 
 usage() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
@@ -65,6 +70,8 @@ while [[ $# -gt 0 ]]; do
     --scope-file) SCOPE_FILE="$2"; shift 2 ;;
     --provider)   PROVIDER="$2"; shift 2 ;;
     --model)      MODEL="$2"; shift 2 ;;
+    --attack-provider) ATTACK_PROVIDER="$2"; shift 2 ;;
+    --attack-model)    ATTACK_MODEL="$2"; shift 2 ;;
     --max-calls)  MAX_CALLS="$2"; shift 2 ;;
     --max-wall)   MAX_WALL="$2"; shift 2 ;;
     --no-cap)     MAX_CALLS=0; MAX_WALL=0; shift ;;
@@ -167,6 +174,7 @@ EXTS=(
   extensions/src/exploit/index.ts
   extensions/src/lifecycle/index.ts
   extensions/src/cockpit/index.ts
+  extensions/src/delegation/index.ts
 )
 E_ARGS=(); for e in "${EXTS[@]}"; do E_ARGS+=(-e "$e"); done
 
@@ -175,6 +183,7 @@ printf '  target      %s  (%s)\n' "$TARGET" "$REACH"
 printf '  scope       %s\n' "$SCOPE_CSV"
 printf '  provider    %s\n' "$PROVIDER"
 printf '  model       %s\n' "${MODEL:-(provider default)}"
+[[ -n "$ATTACK_PROVIDER$ATTACK_MODEL" ]] && printf '  attack model %s / %s   (exploitation phase)\n' "${ATTACK_PROVIDER:-$PROVIDER}" "${ATTACK_MODEL:-${MODEL:-default}}"
 CALLS_LABEL="$MAX_CALLS tool-calls"; [[ "$MAX_CALLS" == 0 ]] && CALLS_LABEL="unlimited tool-calls"
 WALL_LABEL="${MAX_WALL}s wall-clock";  [[ "$MAX_WALL" == 0 ]] && WALL_LABEL="unlimited wall-clock"
 printf '  caps        %s · %s\n' "$CALLS_LABEL" "$WALL_LABEL"
@@ -196,6 +205,12 @@ export PLUTO_SCOPE_HOSTS="$SCOPE_CSV"
 export PLUTO_MAX_TOOL_CALLS="$MAX_CALLS"
 export PLUTO_MAX_WALLCLOCK_S="$MAX_WALL"
 export PLUTO_SUBAGENT_MODEL="$MODEL"
+export PLUTO_SUBAGENT_PROVIDER="$PROVIDER"
+# Phase routing: the exploitation ("attack surface") sub-agent can run on a
+# different model than the orchestrator — a free-tier open model or a local one
+# with no content refusals. Unset → it stays on the main provider.
+[[ -n "$ATTACK_PROVIDER" ]] && export PLUTO_ATTACK_PROVIDER="$ATTACK_PROVIDER"
+[[ -n "$ATTACK_MODEL" ]]    && export PLUTO_ATTACK_MODEL="$ATTACK_MODEL"
 [[ -n "$PROGRAM" ]]    && export PLUTO_PROGRAM="$PROGRAM"
 [[ -n "$TRAFFIC_ID" ]] && export PLUTO_TRAFFIC_ID="$TRAFFIC_ID"
 [[ -n "$RATE" ]]       && export PLUTO_RATE_LIMIT="$RATE"

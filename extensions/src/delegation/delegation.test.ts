@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildSubAgentArgs, specialistExtensions } from "./spawn.js";
+import { buildSubAgentArgs, specialistExtensions, subAgentTarget } from "./spawn.js";
 
 const RED_LINES = "extensions/src/red-lines/index.ts";
 const TOOL_LOG = "extensions/src/tool-log/index.ts";
@@ -41,4 +41,40 @@ test("buildSubAgentArgs emits -e red-lines and runs ephemeral (--no-session)", (
 	assert.ok(args.includes(RED_LINES));
 	// The prompt is passed via -p.
 	assert.ok(args.includes("-p"));
+});
+
+test("phase routing: exploitation uses the attack model, others the main model", () => {
+	const saved = {
+		p: process.env["PLUTO_SUBAGENT_PROVIDER"],
+		m: process.env["PLUTO_SUBAGENT_MODEL"],
+		ap: process.env["PLUTO_ATTACK_PROVIDER"],
+		am: process.env["PLUTO_ATTACK_MODEL"],
+	};
+	try {
+		process.env["PLUTO_SUBAGENT_PROVIDER"] = "groq";
+		process.env["PLUTO_SUBAGENT_MODEL"] = "llama-3.3-70b-versatile";
+		process.env["PLUTO_ATTACK_PROVIDER"] = "llama.cpp";
+		process.env["PLUTO_ATTACK_MODEL"] = "qwen2.5-coder";
+
+		// The attack-surface phase routes to the offensive (local/open) model.
+		assert.deepEqual(subAgentTarget("exploitation"), { provider: "llama.cpp", model: "qwen2.5-coder" });
+		// Recon and analysis stay on the main provider.
+		assert.deepEqual(subAgentTarget("recon"), { provider: "groq", model: "llama-3.3-70b-versatile" });
+		assert.deepEqual(subAgentTarget("analyst"), { provider: "groq", model: "llama-3.3-70b-versatile" });
+
+		// With no attack override, exploitation falls back to the main provider (no divergence).
+		delete process.env["PLUTO_ATTACK_PROVIDER"];
+		delete process.env["PLUTO_ATTACK_MODEL"];
+		assert.deepEqual(subAgentTarget("exploitation"), { provider: "groq", model: "llama-3.3-70b-versatile" });
+	} finally {
+		for (const [k, v] of [
+			["PLUTO_SUBAGENT_PROVIDER", saved.p],
+			["PLUTO_SUBAGENT_MODEL", saved.m],
+			["PLUTO_ATTACK_PROVIDER", saved.ap],
+			["PLUTO_ATTACK_MODEL", saved.am],
+		] as const) {
+			if (v === undefined) delete process.env[k];
+			else process.env[k] = v;
+		}
+	}
 });

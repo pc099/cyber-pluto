@@ -30,7 +30,7 @@ const LOG_FILE = "delegations.jsonl";
 async function logDelegation(
 	cwd: string,
 	mode: string,
-	run: { specialist: string; extensions: string[]; model: string; output: string },
+	run: { specialist: string; extensions: string[]; provider?: string; model: string; output: string },
 	attemptId: number | undefined,
 ): Promise<string> {
 	// Retain the full sub-agent output as evidence.
@@ -50,6 +50,7 @@ async function logDelegation(
 				ts: new Date().toISOString(),
 				mode,
 				specialist: run.specialist,
+				provider: run.provider,
 				model: run.model,
 				extensions: run.extensions,
 				attemptId,
