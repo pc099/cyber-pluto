@@ -21,6 +21,7 @@ import type {
 	ToolCallEvent,
 	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import { redactSecrets } from "../shared/redact.js";
 import { recordAttemptEnd, recordAttemptStart, startEngagement } from "./attempts-recorder.js";
 
 const LOG_DIR = "logs";
@@ -50,7 +51,10 @@ type ToolLogEntry = ToolCallLogEntry | ToolExecutionEndLogEntry;
 async function appendLogEntry(cwd: string, entry: ToolLogEntry): Promise<void> {
 	const dir = join(cwd, LOG_DIR);
 	const file = join(dir, LOG_FILE);
-	const line = `${JSON.stringify(entry)}\n`;
+	// Redact secrets (private keys, tokens, passwords, dumped credentials) and
+	// cap oversized output before this reaches disk — "everything is logged"
+	// must not mean "every secret is logged in the clear".
+	const line = `${redactSecrets(JSON.stringify(entry))}\n`;
 	try {
 		await mkdir(dir, { recursive: true });
 		await appendFile(file, line, "utf8");
