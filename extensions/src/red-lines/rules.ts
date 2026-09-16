@@ -93,6 +93,23 @@ export function extractHosts(text: string): string[] {
 			hosts.add(m[0]);
 		}
 	}
+	// Bare hostnames in network-tool args — the vectors a prompt-injection would
+	// use to exfil/pivot without an http(s):// URL. Kept narrow (only after a
+	// known network command, after `@`, or in a /dev/tcp reverse-shell path) so
+	// they don't false-block ordinary dotted tokens like `script.py 8080`.
+	// Full coverage still belongs at the network egress layer, not text parsing.
+	for (const m of text.matchAll(/\b(?:nc|ncat|netcat|telnet|socat)\s+(?:-\S+\s+)*([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/gi)) {
+		const h = m[1] && literalHostPrefix(m[1]);
+		if (h && !validIpv4(h)) hosts.add(normalizeHost(h));
+	}
+	for (const m of text.matchAll(/@([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/gi)) {
+		const h = m[1] && literalHostPrefix(m[1]); // user@host (ssh/scp/rsync pivot)
+		if (h && !validIpv4(h)) hosts.add(normalizeHost(h));
+	}
+	for (const m of text.matchAll(/\/dev\/(?:tcp|udp)\/([a-z0-9.-]+)\//gi)) {
+		const h = m[1] && literalHostPrefix(m[1]);
+		if (h && !validIpv4(h)) hosts.add(normalizeHost(h));
+	}
 	return [...hosts];
 }
 

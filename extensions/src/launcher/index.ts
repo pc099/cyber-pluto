@@ -238,6 +238,7 @@ async function main(): Promise<void> {
 		`  model       ${plan.model ?? "(profile default)"}\n` +
 		`  caps        ${capsCalls} · ${capsWall}\n` +
 		`  mode        ${plan.headless ? "headless (autonomous)" : "interactive shell"}\n` +
+		`  profile     .pi/settings.json — the harness stack (trusted with -a)\n` +
 		`  label       ${plan.label}\n` +
 		(plan.attackProvider || plan.attackModel ? `  attack      ${plan.attackProvider ?? plan.provider ?? "default"} / ${plan.attackModel ?? plan.model ?? "default"}\n` : "") +
 		`  kill switch touch ${join(root, "state/KILL_SWITCH")}\n` +
