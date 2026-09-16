@@ -9,11 +9,15 @@
 export interface HardCaps {
 	maxToolCalls: number;
 	maxWallClockSeconds: number;
+	/** Cumulative-token ceiling. Cost — not tool-count — is the binding
+	 * constraint on a metered provider (a runaway once hit ~24M tokens, ~97%
+	 * cache reads), so the harness caps estimated cumulative tokens too. */
+	maxTokens: number;
 }
 
-export type CapVerdict = { stop: true; reason: string; kind: "tool_calls" | "wall_clock" } | { stop: false };
+export type CapVerdict = { stop: true; reason: string; kind: "tool_calls" | "wall_clock" | "tokens" } | { stop: false };
 
-export function checkHardCaps(toolCallCount: number, elapsedSeconds: number, caps: HardCaps): CapVerdict {
+export function checkHardCaps(toolCallCount: number, elapsedSeconds: number, billedTokens: number, caps: HardCaps): CapVerdict {
 	if (toolCallCount >= caps.maxToolCalls) {
 		return { stop: true, kind: "tool_calls", reason: `tool-call cap reached (${toolCallCount}/${caps.maxToolCalls})` };
 	}
@@ -22,6 +26,13 @@ export function checkHardCaps(toolCallCount: number, elapsedSeconds: number, cap
 			stop: true,
 			kind: "wall_clock",
 			reason: `wall-clock cap reached (${Math.floor(elapsedSeconds)}s/${caps.maxWallClockSeconds}s)`,
+		};
+	}
+	if (billedTokens >= caps.maxTokens) {
+		return {
+			stop: true,
+			kind: "tokens",
+			reason: `token/cost cap reached (~${(billedTokens / 1e6).toFixed(1)}M/${(caps.maxTokens / 1e6).toFixed(1)}M tokens)`,
 		};
 	}
 	return { stop: false };

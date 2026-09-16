@@ -16,7 +16,7 @@
  * cannot call it), it records a submissions row naming the human approver, and
  * Pluto NEVER submits to a platform itself — the operator files it manually.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -27,6 +27,7 @@ import type {
 	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { stateDir } from "../state/db.js";
 import { type Engagement, getEngagement, startEngagement } from "../state/engagement.js";
 import { IllegalStatusTransition } from "../state/findings-repo.js";
 import type { FindingRow, NodeRow } from "../state/types.js";
@@ -39,6 +40,22 @@ const STATUS_ICON: Record<string, string> = { candidate: "?", validated: "✓", 
 
 function eng(): Engagement | undefined {
 	return getEngagement();
+}
+
+/** Read the lifecycle's live readout (tokens/cost) — written to the engagement
+ * state dir because extensions run in isolated realms and can't share memory. */
+function readCost(cwd: string): { billedTokens: number } | undefined {
+	try {
+		const raw = readFileSync(join(stateDir(cwd), "lifecycle-status.json"), "utf8");
+		const o = JSON.parse(raw) as { billedTokens?: number };
+		return typeof o.billedTokens === "number" ? { billedTokens: o.billedTokens } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function fmtTokens(n: number): string {
+	return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
 }
 
 function fmtFinding(f: FindingRow): string {
@@ -58,9 +75,10 @@ function refreshWidget(ctx: ExtensionContext): void {
 	const t = e.repos.targets.getById(e.targetId);
 	const c = e.repos.findings.countByStatus(e.targetId);
 	const cap = Number(process.env["PLUTO_MAX_TOOL_CALLS"] ?? 200);
+	const cost = readCost(ctx.cwd);
 	ctx.ui.setWidget("pluto-status", [
 		`🪐 pluto · ${t?.host ?? t?.label ?? "?"} · phase ${t?.phase ?? "recon"}`,
-		`findings ✓${c.validated} ?${c.candidate} →${c.submitted} ✗${c.rejected} · tree ${e.repos.nodes.countByTarget(e.targetId)} · creds ${e.repos.credentials.countByTarget(e.targetId)} · calls ${e.repos.attempts.countByTarget(e.targetId)}/${cap}`,
+		`findings ✓${c.validated} ?${c.candidate} →${c.submitted} ✗${c.rejected} · tree ${e.repos.nodes.countByTarget(e.targetId)} · creds ${e.repos.credentials.countByTarget(e.targetId)} · calls ${e.repos.attempts.countByTarget(e.targetId)}/${cap}${cost ? ` · ~${fmtTokens(cost.billedTokens)} tok` : ""}`,
 	]);
 }
 
@@ -78,6 +96,7 @@ async function showStatus(ctx: ExtensionCommandContext): Promise<void> {
 		`tree      ${e.repos.nodes.countByTarget(e.targetId)} nodes`,
 		`creds     ${e.repos.credentials.countByTarget(e.targetId)}`,
 		`calls     ${e.repos.attempts.countByTarget(e.targetId)} / ${process.env["PLUTO_MAX_TOOL_CALLS"] ?? 200}`,
+		`tokens    ~${fmtTokens(readCost(ctx.cwd)?.billedTokens ?? 0)} est. / ${fmtTokens(Number(process.env["PLUTO_MAX_TOKENS"] ?? 4_000_000))} cap`,
 	]);
 	refreshWidget(ctx);
 }

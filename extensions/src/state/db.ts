@@ -7,8 +7,21 @@ const STATE_DIR = "state";
 const STATE_DB_FILE = "pluto.db";
 
 /**
- * Opens (creating if absent) the per-engagement SQLite state DB at
- * `<cwd>/state/pluto.db` and applies the Layer 2 schema idempotently.
+ * The state directory for the current engagement. Per-engagement isolation:
+ * when the launcher sets `PLUTO_STATE_DIR` (one dir per target, e.g.
+ * `engagements/<label>/state`), every extension's DB handle, and the lifecycle
+ * control files, resolve there instead of the shared repo-root `state/`. This
+ * stops cross-engagement corruption — different targets no longer share one
+ * pluto.db (which caused stale-target rows and a false wall-clock stop), and
+ * two engagements can run without clobbering each other's ledger.
+ */
+export function stateDir(cwd: string): string {
+	return process.env["PLUTO_STATE_DIR"] ?? join(cwd, STATE_DIR);
+}
+
+/**
+ * Opens (creating if absent) the engagement's SQLite state DB and applies the
+ * Layer 2 schema idempotently.
  *
  * Each extension that needs state opens its own handle to the same file
  * (Pi loads extensions in isolated module realms — see engagement.ts), so
@@ -17,7 +30,7 @@ const STATE_DB_FILE = "pluto.db";
  * blocking each other.
  */
 export function openStateDb(cwd: string): DatabaseSync {
-	const path = join(cwd, STATE_DIR, STATE_DB_FILE);
+	const path = join(stateDir(cwd), STATE_DB_FILE);
 	mkdirSync(dirname(path), { recursive: true });
 	const db = new DatabaseSync(path);
 	db.exec("PRAGMA foreign_keys = ON;");

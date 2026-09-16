@@ -55,3 +55,11 @@ reports/
 # Operator engagement scope (may list private-program assets) — keep the example only
 /scope.yaml
 /scope.local.yaml
+
+# The Pluto harness profile is versioned; the rest of .pi/ (session state) is not.
+!/.pi/
+/.pi/*
+!/.pi/settings.json
+
+# Per-engagement workspaces (state DB, evidence, readouts) — runtime data.
+/engagements/

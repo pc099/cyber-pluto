@@ -29,6 +29,7 @@ import type {
 	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import { getEngagement, startEngagement } from "../state/engagement.js";
+import { stateDir } from "../state/db.js";
 import { checkHardCaps, detectStuck, detectUnhealthy } from "./checks.js";
 
 const LOG = { dir: "logs", file: "lifecycle.jsonl" };
@@ -53,6 +54,10 @@ function config() {
 	return {
 		maxToolCalls: capNum("PLUTO_MAX_TOOL_CALLS", 200),
 		maxWallClockSeconds: capNum("PLUTO_MAX_WALLCLOCK_S", 3600),
+		// Cost is the real constraint on a metered provider. Cap estimated
+		// cumulative tokens (default 4M — well above a normal box, well below the
+		// 24M runaway). 0/unlimited disables it like the other caps.
+		maxTokens: capNum("PLUTO_MAX_TOKENS", 4_000_000),
 		stuckRepeatThreshold: num("PLUTO_STUCK_REPEAT", 3),
 		stuckWindow: num("PLUTO_STUCK_WINDOW", 8),
 		stuckEscalateAfter: num("PLUTO_STUCK_ESCALATE", 2),
@@ -70,7 +75,24 @@ const state = {
 	unhealthyHits: 0,
 	stuckHits: 0,
 	nodeCountHistory: [] as number[],
+	// Estimated cumulative tokens: Σ(context size per turn) ≈ the cumulative
+	// input-token bill, since each turn re-sends the whole (mostly cached)
+	// context. A proxy, but a good one for a cost ceiling + live readout.
+	billedTokens: 0,
 };
+
+/** Publish a live engagement readout (tokens/cost, tool calls, elapsed) to the
+ * engagement's state dir so the operator console (/status) can show it. Written
+ * to a file because extensions run in isolated realms and cannot share memory. */
+async function publishStatus(cwd: string, status: { billedTokens: number; toolCalls: number; elapsed: number }): Promise<void> {
+	try {
+		const dir = stateDir(cwd);
+		await mkdir(dir, { recursive: true });
+		await writeFile(join(dir, "lifecycle-status.json"), JSON.stringify({ ts: new Date().toISOString(), ...status }), "utf8");
+	} catch {
+		// a readout write failure must never affect the engagement
+	}
+}
 
 async function logEvent(cwd: string, entry: Record<string, unknown>): Promise<void> {
 	try {
@@ -105,12 +127,22 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		const cfg = config();
 		const target = engagement.repos.targets.getById(engagement.targetId);
 
-		// 1. Hard caps — deterministic force-stop.
+		// 1. Hard caps — deterministic force-stop. Accumulate the estimated token
+		// bill first (context size this turn ≈ input tokens billed this turn),
+		// and publish a running readout for the operator console.
+		try {
+			const used = ctx.getContextUsage?.()?.tokens;
+			if (typeof used === "number" && used > 0) state.billedTokens += used;
+		} catch {
+			// context usage unavailable (e.g. right after compaction) — skip this turn
+		}
 		const toolCallCount = engagement.repos.attempts.countByTarget(engagement.targetId);
 		const elapsed = target ? elapsedSeconds(target.created_at) : 0;
-		const caps = checkHardCaps(toolCallCount, elapsed, {
+		await publishStatus(ctx.cwd, { billedTokens: state.billedTokens, toolCalls: toolCallCount, elapsed });
+		const caps = checkHardCaps(toolCallCount, elapsed, state.billedTokens, {
 			maxToolCalls: cfg.maxToolCalls,
 			maxWallClockSeconds: cfg.maxWallClockSeconds,
+			maxTokens: cfg.maxTokens,
 		});
 		if (caps.stop) {
 			await logEvent(ctx.cwd, { kind: "hard_cap_stop", cap: caps.kind, reason: caps.reason, toolCallCount, elapsed });

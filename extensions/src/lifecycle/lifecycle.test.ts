@@ -8,16 +8,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkHardCaps, detectStuck, detectUnhealthy, repeatCount } from "./checks.js";
 
-const CAPS = { maxToolCalls: 200, maxWallClockSeconds: 3600 };
+const CAPS = { maxToolCalls: 200, maxWallClockSeconds: 3600, maxTokens: 4_000_000 };
 
-test("hard caps fire on tool-call count and on wall-clock, else pass", () => {
-	assert.equal(checkHardCaps(199, 10, CAPS).stop, false);
-	const byCalls = checkHardCaps(200, 10, CAPS);
+test("hard caps fire on tool-call count, wall-clock, and tokens, else pass", () => {
+	assert.equal(checkHardCaps(199, 10, 1_000_000, CAPS).stop, false);
+	const byCalls = checkHardCaps(200, 10, 0, CAPS);
 	assert.equal(byCalls.stop, true);
 	if (byCalls.stop) assert.equal(byCalls.kind, "tool_calls");
-	const byTime = checkHardCaps(5, 3600, CAPS);
+	const byTime = checkHardCaps(5, 3600, 0, CAPS);
 	assert.equal(byTime.stop, true);
 	if (byTime.stop) assert.equal(byTime.kind, "wall_clock");
+	const byTokens = checkHardCaps(5, 10, 4_000_000, CAPS);
+	assert.equal(byTokens.stop, true);
+	if (byTokens.stop) assert.equal(byTokens.kind, "tokens");
 });
 
 test("environmental pause detects each target-health signal, ignores healthy output", () => {

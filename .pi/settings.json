@@ -1,0 +1,20 @@
+{
+  "_comment": "Cyber Pluto harness profile. Running Pi in this repo IS running Pluto — the full extension stack, runtime-skill catalog, and reasoning defaults load from here, so there is no bash wrapper assembling them. Per-engagement inputs (target, scope, caps, briefing) are injected by the launcher; the harness DEFINITION lives here. Paths are relative to this .pi/ directory.",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-haiku-4-5",
+  "extensions": [
+    "../extensions/src/tool-log/index.ts",
+    "../extensions/src/red-lines/index.ts",
+    "../extensions/src/recon/index.ts",
+    "../extensions/src/validators/index.ts",
+    "../extensions/src/vision/index.ts",
+    "../extensions/src/exploit/index.ts",
+    "../extensions/src/lifecycle/index.ts",
+    "../extensions/src/cockpit/index.ts",
+    "../extensions/src/delegation/index.ts",
+    "../extensions/src/capabilities/index.ts"
+  ],
+  "skills": [
+    "../runtime-skills"
+  ]
+}
