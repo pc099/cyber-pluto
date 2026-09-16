@@ -59,18 +59,21 @@ extensions/src/
   recon/ validators/            #   recon→tree→KB · Gate 1 deterministic validators
   vision/ exploit/ delegation/  #   screenshots→vision · MSF-first · sub-agents (§6.4)
   lifecycle/ cockpit/           #   engagement caps/pause/stuck · operator console + Gate 2
+  capabilities/                 #   adaptive capability provisioning (manifest + provision tool)
   state/                        #   Layer 2 SQLite schema + typed repositories
 services/pluto_services/        # Python — kb/ msf_bridge/ oob/
-runtime-skills/                 # Pluto's runtime doctrine (vuln classes, etc.)
-lab/                            # intentionally-vulnerable local targets
+runtime-skills/                 # Pluto's runtime doctrine (vuln classes, binary-exploitation, etc.)
+lab/vulnhub/                    # local KVM box lab (import-box.sh) + intentionally-vulnerable apps
 docs/PHASES.md                  # per-phase model routing
 pi/pi/                          # the Pi fork (git submodule → github.com/pc099/pi)
 ```
 
-**Environment:** DigitalOcean droplet, **3.8 GB RAM / 2 vCPU / no GPU**, Node
-v24, Python 3.13. nmap, chromium, openvpn, telnet, expect, sshpass, proxychains4
-installed. Metasploit NOT installed (mock backend). Runs OpenVPN directly on the
-droplet (`tun0`, HTB Starting-Point US-1).
+**Environment:** DigitalOcean droplet, **3.8 GB RAM / 2 vCPU, but `/dev/kvm` IS
+present** (hardware virtualization — unusual for a cloud VM; enables the local
+VulnHub lab). Node v24, Python 3.13. Installed: nmap, chromium, openvpn, telnet,
+expect, sshpass, proxychains4, **qemu/KVM + libvirt** (NAT net 192.168.122.0/24),
+**pwntools + gdb + ROPgadget** (binary-exploitation capability). Metasploit NOT
+installed (mock backend). Can run OpenVPN directly (`tun0`) for HTB.
 
 ---
 
@@ -87,6 +90,18 @@ droplet (`tun0`, HTB Starting-Point US-1).
   (`/status /findings /nodes /attempts /creds /approve /report /kill /resume`),
   Gate 2 flow, bug-bounty HTTP compliance (traffic-ID header + rate limit),
   provider-selectable launcher, per-phase model routing.
+- **Adaptive capability provisioning** (`extensions/src/capabilities/`): a
+  manifest-driven `provision_capability(domain)` tool — Pluto recognizes the
+  engagement class and installs *that domain's whitelisted toolset* + loads its
+  doctrine skill, on the fly. Safe: the model picks a domain, never a package,
+  so it can't be prompt-injected into arbitrary installs; every provision is
+  logged. First domain: **binary-exploitation** (pwntools/gdb/ROPgadget +
+  a "test-don't-derive" pwn doctrine); stubs for cryptography, forensics, web.
+  Built after a live pwn run wasted ~an hour hand-deriving stack offsets for
+  lack of pwn tools + doctrine.
+- **Local VulnHub lab** (`lab/vulnhub/import-box.sh`): the droplet's `/dev/kvm`
+  lets real VulnHub VMs run KVM-accelerated on a host-private NAT network — a
+  reproducible, no-VPN/no-cost target source Pluto can fully scan.
 - **Test suite: 36/36 passing.**
 
 **KB:** CISA KEV ingested (~1709 records), fingerprint→KEV hypothesis matching
@@ -253,8 +268,35 @@ a one-line change, no new code.
 
 **Hardware constraint:** the droplet (3.8 GB, no GPU) **cannot host a capable
 model** — only a ~1.5–3B CPU model fits, too weak for real exploits. So the open
-model must be **hosted** (Groq/Cerebras free tier, or Ollama Cloud flat-rate) or
-on separate GPU hardware — not local on this droplet.
+model must be **hosted** or on separate GPU hardware — not local on this droplet.
+
+**Open-model shortlist (this session's evaluation):**
+- **Sarvam-105B (API) — current front-runner.** OpenAI-compatible (drop-in Pi
+  provider), agentic/tool-calling, cheap (~$0.80/1M blended, **cached ~$0.13/1M**
+  which suits Pluto's ~97%-cached cost profile), and **India data residency**
+  (best for an India-based operator + eventual client data). Metered but cheap.
+- **GLM-5.3 (z.ai Coding Plan) — close 2nd.** Flat-rate coding subscription
+  (agent-legit, unlike the Anthropic/OpenAI subs), Pi-native `zai` provider,
+  strong coder. China residency. (Self-hosting GLM-5.3 is infeasible: 320B MoE →
+  ~180 GB VRAM @ 4-bit / a multi-GPU node costing far more than the API.)
+- **DeepSeek-V4 (API)** — cheap metered, permissive, China residency.
+- **DeepHat/WhiteRabbitNeo (Kindo)** — security-*purpose-built*, zero refusals,
+  US residency; but largest is **30B** (Kindo-hosted/paid), open one is only 7B
+  (too weak). The "insurance" pick if general models refuse, or for pro client
+  work needing non-China residency.
+- **Free tiers don't work:** Groq free (gpt-oss-120b) confirmed usable *model*
+  but its **8K tokens/min** cap is smaller than Pluto's ~7.5K base context — zero
+  tool calls got through. Free is too throttled for a harness this heavy.
+
+**The one remaining unknown:** whether these general models **refuse** the
+offensive step (untested). Settle it empirically — one run on the local
+lab/VulnHub target with the chosen model.
+
+**Alternative path considered — re-platform onto Claude Code:** ~3–4 weeks of
+work; gains a *legitimate* flat Claude subscription (the sub is ToS-barred in
+Pi, but IS Claude Code), loses all model freedom (Anthropic-only). Only worth it
+if Sarvam/GLM/DeepSeek all fail the refusal test. Not recommended over the ~1-day
+Sarvam test.
 
 **Per-phase routing design (`docs/PHASES.md`):** recon/analysis/orchestration on
 one model; the `exploitation` specialist (the "attack surface") on another via
@@ -269,7 +311,14 @@ into every sub-agent, so a less-aligned attack model is still gate-bounded.
    gates — it wrote confident, fabricated "engagement complete" reports for work
    it never did (the state DB stayed truthful: 0 validated). **Fix: constrain
    report generation to validated DB facts only.** #1 correctness item.
-2. **Containerize Pluto** — it runs as root on the droplet; Pi sandboxes
+2. **Reasoning-loop breaker (NEW, high value).** A live pwn run burned ~an hour
+   inside *extended thinking* — hand-deriving the same stack offsets in a loop.
+   Pluto's stuck-detector only watches repeated *tool calls / no-new-nodes*, so
+   an intra-turn thinking loop is invisible to it. The binary-exploitation
+   doctrine's "re-derived twice → STOP and measure" rule mitigates it, but the
+   proper fix is a lifecycle check that fires when N turns pass with no new tool
+   call / no new evidence.
+3. **Containerize Pluto** — it runs as root on the droplet; Pi sandboxes
    nothing. Top hardening item (also why OS-level privesc is circular locally).
 3. **Per-engagement workspace isolation** — all runs share one `state/pluto.db`
    (a `PLUTO_HOME` per target for state/evidence/logs is wanted).
@@ -281,10 +330,12 @@ into every sub-agent, so a less-aligned attack model is still gate-bounded.
 7. Universal enforcing HTTP proxy so bug-bounty rate/traffic-ID rails apply to
    all bash tools, not just Pluto's own fetches.
 
-**Already fixed this cycle:** red-lines scope false-blocks (shell-var + vhost,
-`269194a`); false environmental pauses + `/resume` (`9bae486`);
+**Already fixed/built this cycle:** red-lines scope false-blocks (shell-var +
+vhost, `269194a`); false environmental pauses + `/resume` (`9bae486`);
 build-CLAUDE.md bleed via `-nc` (`291d452`); OOM via bundle CLI (`e03a34e`);
-`--no-cap` and provider selection.
+`--no-cap` and provider selection; per-phase model routing; **adaptive
+capability provisioning + binary-exploitation capability**; the **local VulnHub
+KVM lab**.
 
 ---
 
