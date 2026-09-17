@@ -22,7 +22,9 @@ const execFileAsync = promisify(execFile);
 
 async function run(cmd: string, cwd: string): Promise<{ ok: boolean; output: string }> {
 	try {
-		const { stdout, stderr } = await execFileAsync("bash", ["-lc", cmd], {
+		// Non-login shell (`-c`, not `-lc`): under the sandbox the agent must not
+		// source /etc/profile / ~/.bash_profile (no agent-writable shell-init).
+		const { stdout, stderr } = await execFileAsync("bash", ["-c", cmd], {
 			cwd,
 			timeout: 300000,
 			maxBuffer: 8 * 1024 * 1024,
@@ -71,9 +73,9 @@ export default function capabilitiesExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: "provision_capability",
-		label: "Provision a capability (install tools + load doctrine)",
+		label: "Provision a capability (verify tools + load doctrine)",
 		description:
-			"Adapt the harness to the engagement class you're facing. Installs the domain's pre-vetted toolset and returns its doctrine. Use it the moment you identify the target type and find your current tools don't fit — e.g. a raw binary/networked-binary service => 'binary-exploitation', a cipher/RSA challenge => 'cryptography', a pcap/dump => 'forensics'. You choose the DOMAIN; only that domain's whitelisted tools are installed.",
+			"Adapt to the engagement class you're facing: VERIFY the domain's pre-baked toolset is present and load its doctrine into context. Use it the moment you identify the target type — a raw binary/networked-binary service => 'binary-exploitation', a cipher/RSA challenge => 'cryptography', a pcap/dump => 'forensics'. The tools are pre-installed in the harness image; this does NOT install anything (the sandboxed agent cannot). If a domain reports NOT READY, tell the operator to rebuild the image with that domain's tools.",
 		parameters: Type.Object({
 			domain: Type.String({ description: "The capability domain: binary-exploitation | cryptography | forensics | web" }),
 		}),
@@ -87,17 +89,14 @@ export default function capabilitiesExtension(pi: ExtensionAPI): void {
 				};
 			}
 
+			// VERIFY-ONLY (board v0): tools are pre-baked into the frozen, read-only
+			// harness image — the sandboxed agent has no writable system dirs and no
+			// package-repo egress, which is exactly what closes the writable-system +
+			// repo-egress holes. manifest.ts's apt/pip lists are the source of truth
+			// for the image build, NOT a runtime install path.
 			const steps: string[] = [];
-			if (cap.apt.length > 0) {
-				const r = await run(`apt-get install -y ${cap.apt.join(" ")}`, ctx.cwd);
-				steps.push(`apt ${cap.apt.join(" ")}: ${r.ok ? "ok" : "FAILED"}`);
-			}
-			if (cap.pip.length > 0) {
-				const r = await run(`pip install --break-system-packages -q ${cap.pip.join(" ")}`, ctx.cwd);
-				steps.push(`pip ${cap.pip.join(" ")}: ${r.ok ? "ok" : "FAILED"}`);
-			}
 			const verify = await run(cap.verify, ctx.cwd);
-			steps.push(`verify: ${verify.ok ? "READY" : "NOT READY"}`);
+			steps.push(`verify (${cap.apt.concat(cap.pip).join(", ") || "core tools"}): ${verify.ok ? "READY" : "NOT READY — rebuild the image"}`);
 
 			let doctrine = "";
 			if (cap.skill) {

@@ -12,7 +12,7 @@
  * `buildPlan()` is pure (argv -> LaunchPlan) so the assembly is unit-tested,
  * not left as untestable shell.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -36,6 +36,7 @@ export interface LaunchPlan {
 	trafficId?: string;
 	rate?: string;
 	headless: boolean;
+	sandbox: boolean;
 	dryRun: boolean;
 	env: Record<string, string>;
 	cliArgs: string[];
@@ -66,6 +67,7 @@ export function buildPlan(argv: string[]): ParseResult {
 	let tunnel = false;
 	let dryRun = false;
 	let headless = false;
+	let sandbox = false;
 	let program: string | undefined;
 	let trafficId: string | undefined;
 	let rate: string | undefined;
@@ -97,6 +99,7 @@ export function buildPlan(argv: string[]): ParseResult {
 				case "--traffic-id": trafficId = next(); break;
 				case "--rate": rate = next(); break;
 				case "--headless": case "--auto": headless = true; break;
+				case "--sandbox": sandbox = true; break;
 				case "--dry-run": dryRun = true; break;
 				case "-h": case "--help": return { kind: "help" };
 				default:
@@ -177,7 +180,7 @@ export function buildPlan(argv: string[]): ParseResult {
 		kind: "plan",
 		plan: {
 			target, scopeHosts, scopeCsv, label, provider, model, attackProvider, attackModel,
-			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, dryRun,
+			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, sandbox, dryRun,
 			env, cliArgs, briefing,
 		},
 	};
@@ -215,6 +218,9 @@ Options:
   --tunnel             Brief Pluto to use TCP-connect scans
   --program / --traffic-id / --rate   Bug-bounty compliance
   --headless           Run autonomously (no interactive shell)
+  --sandbox            Confine the agent: unprivileged 'pluto' uid, read-only
+                       harness tree, nftables egress allowlist from scope (root;
+                       run sandbox/setup.sh once first)
   --dry-run            Print the resolved plan and exit
   -h, --help           This help`;
 
@@ -263,13 +269,45 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	const child = spawn("node", plan.cliArgs, {
-		cwd: root,
-		stdio: "inherit",
-		env: { ...process.env, ...plan.env },
-	});
+	const childEnv = { ...process.env, ...plan.env };
+
+	if (plan.sandbox) {
+		if (process.getuid?.() !== 0) {
+			process.stderr.write("cyberpluto --sandbox must be run as root (it applies the egress firewall and drops to the 'pluto' uid). Run sandbox/setup.sh first.\n");
+			process.exitCode = 1; return;
+		}
+		// 1. Apply the authoritative egress allowlist from OPERATOR scope + the
+		//    provider host(s), BEFORE the agent starts. pluto can't change it.
+		const providerHosts = PROVIDER_HOSTS[plan.provider ?? "anthropic"] ?? [];
+		const attackHosts = plan.attackProvider ? (PROVIDER_HOSTS[plan.attackProvider] ?? []) : [];
+		const egress = spawnSync(join(root, "sandbox/egress.sh"), ["apply", plan.scopeHosts.join(" "), ...providerHosts, ...attackHosts], { stdio: "inherit" });
+		if (egress.status !== 0) { process.stderr.write("failed to apply egress allowlist; aborting.\n"); process.exitCode = 1; return; }
+		// 2. Run the agent confined (setpriv no_new_privs + bwrap + owner-match).
+		const engDir = join(root, "engagements", plan.label);
+		const child = spawn(join(root, "sandbox/run-sandboxed.sh"), [engDir, "--", "node", ...plan.cliArgs], {
+			cwd: root, stdio: "inherit", env: childEnv,
+		});
+		child.on("exit", (code) => {
+			spawnSync(join(root, "sandbox/egress.sh"), ["teardown"], { stdio: "ignore" });
+			process.exitCode = code ?? 0;
+		});
+		return;
+	}
+
+	const child = spawn("node", plan.cliArgs, { cwd: root, stdio: "inherit", env: childEnv });
 	child.on("exit", (code) => { process.exitCode = code ?? 0; });
 }
+
+/** Provider → the API host(s) to allow through the egress firewall (resolved +
+ * pinned at launch by egress.sh). The scope target is added separately. */
+const PROVIDER_HOSTS: Record<string, string[]> = {
+	anthropic: ["api.anthropic.com"],
+	openai: ["api.openai.com"],
+	"openai-codex": ["chatgpt.com", "api.openai.com"],
+	deepseek: ["api.deepseek.com"],
+	zai: ["api.z.ai", "open.bigmodel.cn"],
+	groq: ["api.groq.com"],
+};
 
 // Only run main when invoked directly (not when imported by tests).
 if (process.argv[1] && process.argv[1].endsWith("launcher/index.js")) {
