@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { redactSecrets } from "./redact.js";
+import { capField, redactSecrets } from "./redact.js";
 
 test("redacts high-confidence secret shapes", () => {
 	assert.match(redactSecrets("sshpass -p Sup3rSecret ssh nathan@10.0.0.5"), /sshpass -p \[REDACTED\]/);
@@ -18,11 +18,19 @@ test("masks explicitly-known recovered secrets", () => {
 	assert.match(out, /\[REDACTED\]/);
 });
 
-test("does not mangle benign output and caps oversized output", () => {
+test("redactSecrets does not mangle benign output and does NOT truncate", () => {
 	const benign = '{"rows":[{"id":1,"name":"widget"}]}';
 	assert.equal(redactSecrets(benign), benign);
 	const big = "A".repeat(20_000);
-	const capped = redactSecrets(big);
-	assert.ok(capped.length < big.length);
-	assert.match(capped, /truncated/);
+	assert.equal(redactSecrets(big).length, big.length, "redactSecrets must not truncate (would corrupt JSONL)");
+});
+
+test("capField truncates an oversized field but leaves small values as-is", () => {
+	const small = { id: 1, name: "widget" };
+	assert.deepEqual(capField(small), small);
+	const capped = capField("A".repeat(20_000));
+	assert.ok(typeof capped === "string" && capped.length < 20_000);
+	assert.match(capped as string, /truncated/);
+	// A JSONL line built from a capped field must still be valid JSON.
+	assert.doesNotThrow(() => JSON.parse(JSON.stringify({ result: capField("B".repeat(50_000)) })));
 });

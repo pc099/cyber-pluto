@@ -44,11 +44,11 @@ function eng(): Engagement | undefined {
 
 /** Read the lifecycle's live readout (tokens/cost) — written to the engagement
  * state dir because extensions run in isolated realms and can't share memory. */
-function readCost(cwd: string): { billedTokens: number } | undefined {
+function readCost(cwd: string): { contextTokensSeen: number } | undefined {
 	try {
 		const raw = readFileSync(join(stateDir(cwd), "lifecycle-status.json"), "utf8");
-		const o = JSON.parse(raw) as { billedTokens?: number };
-		return typeof o.billedTokens === "number" ? { billedTokens: o.billedTokens } : undefined;
+		const o = JSON.parse(raw) as { contextTokensSeen?: number };
+		return typeof o.contextTokensSeen === "number" ? { contextTokensSeen: o.contextTokensSeen } : undefined;
 	} catch {
 		return undefined;
 	}
@@ -78,7 +78,7 @@ function refreshWidget(ctx: ExtensionContext): void {
 	const cost = readCost(ctx.cwd);
 	ctx.ui.setWidget("pluto-status", [
 		`🪐 pluto · ${t?.host ?? t?.label ?? "?"} · phase ${t?.phase ?? "recon"}`,
-		`findings ✓${c.validated} ?${c.candidate} →${c.submitted} ✗${c.rejected} · tree ${e.repos.nodes.countByTarget(e.targetId)} · creds ${e.repos.credentials.countByTarget(e.targetId)} · calls ${e.repos.attempts.countByTarget(e.targetId)}/${cap}${cost ? ` · ~${fmtTokens(cost.billedTokens)} tok` : ""}`,
+		`findings ✓${c.validated} ?${c.candidate} →${c.submitted} ✗${c.rejected} · tree ${e.repos.nodes.countByTarget(e.targetId)} · creds ${e.repos.credentials.countByTarget(e.targetId)} · calls ${e.repos.attempts.countByTarget(e.targetId)}/${cap}${cost ? ` · ~${fmtTokens(cost.contextTokensSeen)} tok` : ""}`,
 	]);
 }
 
@@ -96,7 +96,7 @@ async function showStatus(ctx: ExtensionCommandContext): Promise<void> {
 		`tree      ${e.repos.nodes.countByTarget(e.targetId)} nodes`,
 		`creds     ${e.repos.credentials.countByTarget(e.targetId)}`,
 		`calls     ${e.repos.attempts.countByTarget(e.targetId)} / ${process.env["PLUTO_MAX_TOOL_CALLS"] ?? 200}`,
-		`tokens    ~${fmtTokens(readCost(ctx.cwd)?.billedTokens ?? 0)} est. / ${fmtTokens(Number(process.env["PLUTO_MAX_TOKENS"] ?? 4_000_000))} cap`,
+		`tokens    ~${fmtTokens(readCost(ctx.cwd)?.contextTokensSeen ?? 0)} est. / ${fmtTokens(Number(process.env["PLUTO_MAX_TOKENS"] ?? 4_000_000))} cap`,
 	]);
 	refreshWidget(ctx);
 }

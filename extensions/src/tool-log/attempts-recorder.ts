@@ -11,6 +11,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseBaseTool } from "../shared/bash-command.js";
+import { capField, redactSecrets } from "../shared/redact.js";
 import { getEngagement, startEngagement } from "../state/engagement.js";
 import { attackTagForCommand } from "./attack-mapping.js";
 
@@ -19,6 +20,22 @@ export { startEngagement };
 const EVIDENCE_DIR = "evidence/attempts";
 
 const pendingAttemptIds = new Map<string, number>();
+
+/** The exact secret values Pluto has recovered this engagement, so they can be
+ * masked wherever they resurface in logs/evidence (a recovered password reused
+ * in a later command has no reliable "shape" for pattern-only redaction). */
+export function knownSecrets(): string[] {
+	const engagement = getEngagement();
+	if (!engagement) return [];
+	try {
+		return engagement.repos.credentials
+			.listByTarget(engagement.targetId)
+			.map((c) => c.secret)
+			.filter((s): s is string => typeof s === "string" && s.length >= 3);
+	} catch {
+		return [];
+	}
+}
 
 function toolAndCommandFor(toolName: string, input: unknown): { tool: string; command: string } {
 	if (toolName === "bash" && input && typeof input === "object" && "command" in input) {
@@ -36,11 +53,13 @@ export function recordAttemptStart(toolCallId: string, toolName: string, input: 
 	}
 	const { tool, command } = toolAndCommandFor(toolName, input);
 	const tag = toolName === "bash" ? attackTagForCommand(command) : undefined;
+	// ATT&CK tagging uses the real command; the STORED command is redacted so a
+	// secret in the command line (e.g. `sshpass -p …`) isn't persisted in clear.
 	const attempt = engagement.repos.attempts.start({
 		targetId: engagement.targetId,
 		nodeId: engagement.rootNodeId,
 		tool,
-		command,
+		command: redactSecrets(command, knownSecrets()),
 		tactic: tag?.tactic,
 		technique: tag?.technique,
 	});
@@ -79,6 +98,9 @@ async function writeOutputEvidence(cwd: string, attemptId: number, result: unkno
 	const relPath = join(EVIDENCE_DIR, `${attemptId}.json`);
 	const absPath = join(cwd, relPath);
 	await mkdir(dirname(absPath), { recursive: true });
-	await writeFile(absPath, JSON.stringify(result, null, 2), "utf8");
+	// The evidence copy must not be a plaintext bypass of the JSONL redaction:
+	// cap the oversized field, then mask secrets (patterns + recovered creds).
+	const safe = redactSecrets(JSON.stringify(capField(result), null, 2), knownSecrets());
+	await writeFile(absPath, safe, "utf8");
 	return relPath;
 }

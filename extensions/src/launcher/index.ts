@@ -29,6 +29,7 @@ export interface LaunchPlan {
 	attackModel?: string;
 	maxCalls: number;
 	maxWall: number;
+	maxTokens: number;
 	objective: string;
 	tunnel: boolean;
 	program?: string;
@@ -60,6 +61,7 @@ export function buildPlan(argv: string[]): ParseResult {
 	let attackModel: string | undefined;
 	let maxCalls = 200;
 	let maxWall = 3600;
+	let maxTokens = 4_000_000;
 	let label = "";
 	let tunnel = false;
 	let dryRun = false;
@@ -87,7 +89,8 @@ export function buildPlan(argv: string[]): ParseResult {
 				case "--attack-model": attackModel = next(); break;
 				case "--max-calls": maxCalls = Number(next()); break;
 				case "--max-wall": maxWall = Number(next()); break;
-				case "--no-cap": maxCalls = 0; maxWall = 0; break;
+				case "--max-tokens": maxTokens = Number(next()); break;
+				case "--no-cap": maxCalls = 0; maxWall = 0; maxTokens = 0; break;
 				case "--label": label = next(); break;
 				case "--tunnel": tunnel = true; break;
 				case "--program": program = next(); break;
@@ -144,10 +147,12 @@ export function buildPlan(argv: string[]): ParseResult {
 		PLUTO_SCOPE_HOSTS: scopeCsv,
 		PLUTO_MAX_TOOL_CALLS: String(maxCalls),
 		PLUTO_MAX_WALLCLOCK_S: String(maxWall),
+		PLUTO_MAX_TOKENS: String(maxTokens),
 		PLUTO_SUBAGENT_PROVIDER: provider ?? "anthropic",
-		// Per-engagement state isolation: each target gets its own state DB +
-		// evidence + readout, so engagements never share one pluto.db (which
-		// caused stale-target rows and a false wall-clock stop).
+		// Per-target state-DB isolation: each target gets its own pluto.db, so
+		// targets never share one ledger (which accumulated stale-target rows).
+		// Control files, logs, and evidence stay at the repo root — run one
+		// engagement at a time (see state/db.ts stateDir docstring).
 		PLUTO_STATE_DIR: `engagements/${label}/state`,
 	};
 	if (model) env.PLUTO_SUBAGENT_MODEL = model;
@@ -163,13 +168,16 @@ export function buildPlan(argv: string[]): ParseResult {
 	if (provider) cliArgs.push("--provider", provider);
 	if (model) cliArgs.push("--model", model);
 	cliArgs.push("--append-system-prompt", briefing);
-	if (headless) cliArgs.push("-p", `Begin the engagement against ${target} now. Start with recon.`);
+	if (headless) {
+		env.PLUTO_HEADLESS = "1"; // lifecycle turns an environmental pause into a terminal stop (no operator to /resume)
+		cliArgs.push("-p", `Begin the engagement against ${target} now. Start with recon.`);
+	}
 
 	return {
 		kind: "plan",
 		plan: {
 			target, scopeHosts, scopeCsv, label, provider, model, attackProvider, attackModel,
-			maxCalls, maxWall, objective, tunnel, program, trafficId, rate, headless, dryRun,
+			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, dryRun,
 			env, cliArgs, briefing,
 		},
 	};
@@ -199,8 +207,10 @@ Options:
   --attack-provider P  Provider for the exploitation phase (phase routing)
   --attack-model NAME  Model for the exploitation phase
   --max-calls N        Tool-call hard cap (default 200; 0 = unlimited)
-  --max-wall SECONDS   Wall-clock hard cap (default 3600; 0 = unlimited)
-  --no-cap             Remove both hard caps
+  --max-wall SECONDS   Active wall-clock hard cap (default 3600; 0 = unlimited)
+  --max-tokens N       Context-token ceiling — a conservative over-estimate of
+                       spend, not a bill (default 4000000; 0 = unlimited)
+  --no-cap             Remove all hard caps
   --label NAME         Engagement label
   --tunnel             Brief Pluto to use TCP-connect scans
   --program / --traffic-id / --rate   Bug-bounty compliance
@@ -229,14 +239,15 @@ async function main(): Promise<void> {
 	}
 
 	process.stdout.write(BANNER);
-	const capsCalls = plan.maxCalls === 0 ? "unlimited tool-calls" : `${plan.maxCalls} tool-calls`;
-	const capsWall = plan.maxWall === 0 ? "unlimited wall-clock" : `${plan.maxWall}s wall-clock`;
+	const capsCalls = plan.maxCalls === 0 ? "unlimited calls" : `${plan.maxCalls} calls`;
+	const capsWall = plan.maxWall === 0 ? "unlimited wall" : `${plan.maxWall}s wall`;
+	const capsTok = plan.maxTokens === 0 ? "unlimited tokens" : `~${(plan.maxTokens / 1e6).toFixed(1)}M ctx-tokens (est.)`;
 	process.stdout.write(
 		`  target      ${plan.target}\n` +
 		`  scope       ${plan.scopeCsv}\n` +
 		`  provider    ${plan.provider ?? "(profile default)"}\n` +
 		`  model       ${plan.model ?? "(profile default)"}\n` +
-		`  caps        ${capsCalls} · ${capsWall}\n` +
+		`  caps        ${capsCalls} · ${capsWall} · ${capsTok}\n` +
 		`  mode        ${plan.headless ? "headless (autonomous)" : "interactive shell"}\n` +
 		`  profile     .pi/settings.json — the harness stack (trusted with -a)\n` +
 		`  label       ${plan.label}\n` +

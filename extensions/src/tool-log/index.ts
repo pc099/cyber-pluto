@@ -21,8 +21,8 @@ import type {
 	ToolCallEvent,
 	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
-import { redactSecrets } from "../shared/redact.js";
-import { recordAttemptEnd, recordAttemptStart, startEngagement } from "./attempts-recorder.js";
+import { capField, redactSecrets } from "../shared/redact.js";
+import { knownSecrets, recordAttemptEnd, recordAttemptStart, startEngagement } from "./attempts-recorder.js";
 
 const LOG_DIR = "logs";
 const LOG_FILE = "tool-invocations.jsonl";
@@ -51,10 +51,11 @@ type ToolLogEntry = ToolCallLogEntry | ToolExecutionEndLogEntry;
 async function appendLogEntry(cwd: string, entry: ToolLogEntry): Promise<void> {
 	const dir = join(cwd, LOG_DIR);
 	const file = join(dir, LOG_FILE);
-	// Redact secrets (private keys, tokens, passwords, dumped credentials) and
-	// cap oversized output before this reaches disk — "everything is logged"
-	// must not mean "every secret is logged in the clear".
-	const line = `${redactSecrets(JSON.stringify(entry))}\n`;
+	// Mask secrets (private keys, tokens, passwords, recovered credentials)
+	// before this reaches disk — "everything is logged" must not mean "every
+	// secret is logged in the clear". The oversized field was already capped by
+	// the caller (capField) so the serialized line stays valid JSON.
+	const line = `${redactSecrets(JSON.stringify(entry), knownSecrets())}\n`;
 	try {
 		await mkdir(dir, { recursive: true });
 		await appendFile(file, line, "utf8");
@@ -80,7 +81,7 @@ export default function toolLogExtension(pi: ExtensionAPI): void {
 			sessionId: ctx.sessionManager.getSessionId(),
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
-			input: event.input,
+			input: capField(event.input),
 		});
 	});
 
@@ -93,7 +94,7 @@ export default function toolLogExtension(pi: ExtensionAPI): void {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
 			isError: event.isError,
-			result: event.result,
+			result: capField(event.result),
 		});
 	});
 }

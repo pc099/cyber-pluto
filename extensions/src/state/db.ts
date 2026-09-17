@@ -7,13 +7,20 @@ const STATE_DIR = "state";
 const STATE_DB_FILE = "pluto.db";
 
 /**
- * The state directory for the current engagement. Per-engagement isolation:
- * when the launcher sets `PLUTO_STATE_DIR` (one dir per target, e.g.
- * `engagements/<label>/state`), every extension's DB handle, and the lifecycle
- * control files, resolve there instead of the shared repo-root `state/`. This
- * stops cross-engagement corruption — different targets no longer share one
- * pluto.db (which caused stale-target rows and a false wall-clock stop), and
- * two engagements can run without clobbering each other's ledger.
+ * The state-DB directory for the current engagement. When the launcher sets
+ * `PLUTO_STATE_DIR` (one dir per target, e.g. `engagements/<label>/state`),
+ * every extension's DB handle resolves there instead of the shared repo-root
+ * `state/`. This stops the specific cross-target corruption we hit: different
+ * targets no longer share one `pluto.db` (which accumulated stale-target rows).
+ *
+ * SCOPE OF THIS ISOLATION (honest): only the **DB** and the lifecycle readout
+ * move. The control plane is deliberately GLOBAL — the kill switch and PAUSED
+ * file live at repo-root `state/` so `touch state/KILL_SWITCH` halts any run —
+ * and the audit `logs/` and `evidence/` still write to the repo root, with
+ * evidence filenames keyed on per-DB row ids. So **run one engagement at a
+ * time**: concurrent engagements would interleave logs and collide evidence
+ * files. Full per-engagement isolation of logs/evidence is the (deferred)
+ * multi-engagement feature, not claimed here.
  */
 export function stateDir(cwd: string): string {
 	return process.env["PLUTO_STATE_DIR"] ?? join(cwd, STATE_DIR);

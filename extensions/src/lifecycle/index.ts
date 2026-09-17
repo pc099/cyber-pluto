@@ -70,21 +70,33 @@ function config() {
 
 const PAUSE_FILE = "state/PAUSED";
 
-// In-process lifecycle state for the current run.
+// In-process lifecycle state for THIS run (reset each process).
 const state = {
 	unhealthyHits: 0,
 	stuckHits: 0,
 	nodeCountHistory: [] as number[],
-	// Estimated cumulative tokens: Σ(context size per turn) ≈ the cumulative
-	// input-token bill, since each turn re-sends the whole (mostly cached)
-	// context. A proxy, but a good one for a cost ceiling + live readout.
-	billedTokens: 0,
+	// Active wall-clock is measured from process start, NOT targets.created_at:
+	// with per-engagement DBs a target persists across resumes, so created_at
+	// would false-stop any engagement older than the wall cap on its first call.
+	sessionStart: Date.now(),
+	// Estimated context throughput (NOT dollar cost): Σ over TURNS of the
+	// context size that turn. Accumulated once per turn (guarded by a change in
+	// context size) so N parallel tool calls in one turn aren't counted N times.
+	// Cache reads bill far below full price, so this OVER-estimates spend and
+	// is a conservative ceiling + a rough readout, never a bill.
+	contextTokensSeen: 0,
+	lastContextTokens: -1,
 };
+
+const HEADLESS = ((): boolean => {
+	const v = (process.env["PLUTO_HEADLESS"] ?? "").toLowerCase();
+	return v === "1" || v === "true" || v === "yes";
+})();
 
 /** Publish a live engagement readout (tokens/cost, tool calls, elapsed) to the
  * engagement's state dir so the operator console (/status) can show it. Written
  * to a file because extensions run in isolated realms and cannot share memory. */
-async function publishStatus(cwd: string, status: { billedTokens: number; toolCalls: number; elapsed: number }): Promise<void> {
+async function publishStatus(cwd: string, status: { contextTokensSeen: number; toolCalls: number; elapsed: number }): Promise<void> {
 	try {
 		const dir = stateDir(cwd);
 		await mkdir(dir, { recursive: true });
@@ -127,19 +139,23 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		const cfg = config();
 		const target = engagement.repos.targets.getById(engagement.targetId);
 
-		// 1. Hard caps — deterministic force-stop. Accumulate the estimated token
-		// bill first (context size this turn ≈ input tokens billed this turn),
-		// and publish a running readout for the operator console.
+		// 1. Hard caps — deterministic force-stop. Accumulate the context-token
+		// estimate ONCE PER TURN: only add when the context size changed, so the
+		// N parallel tool calls of a single turn (one API request) aren't counted
+		// N times. Publish a running readout for the operator console.
 		try {
 			const used = ctx.getContextUsage?.()?.tokens;
-			if (typeof used === "number" && used > 0) state.billedTokens += used;
+			if (typeof used === "number" && used > 0 && used !== state.lastContextTokens) {
+				state.contextTokensSeen += used;
+				state.lastContextTokens = used;
+			}
 		} catch {
 			// context usage unavailable (e.g. right after compaction) — skip this turn
 		}
 		const toolCallCount = engagement.repos.attempts.countByTarget(engagement.targetId);
-		const elapsed = target ? elapsedSeconds(target.created_at) : 0;
-		await publishStatus(ctx.cwd, { billedTokens: state.billedTokens, toolCalls: toolCallCount, elapsed });
-		const caps = checkHardCaps(toolCallCount, elapsed, state.billedTokens, {
+		const elapsed = (Date.now() - state.sessionStart) / 1000; // active run time, not target age
+		await publishStatus(ctx.cwd, { contextTokensSeen: state.contextTokensSeen, toolCalls: toolCallCount, elapsed });
+		const caps = checkHardCaps(toolCallCount, elapsed, state.contextTokensSeen, {
 			maxToolCalls: cfg.maxToolCalls,
 			maxWallClockSeconds: cfg.maxWallClockSeconds,
 			maxTokens: cfg.maxTokens,
@@ -160,6 +176,15 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 				reason = readFileSync(join(ctx.cwd, PAUSE_FILE), "utf8").trim() || reason;
 			} catch {
 				// keep default
+			}
+			// Headless has no operator/console to /resume, so a pause that only
+			// BLOCKS would spin on blocked calls until a cap force-stops it,
+			// burning budget doing nothing. In headless, a pause is terminal.
+			if (HEADLESS) {
+				await logEvent(ctx.cwd, { kind: "environmental_pause_stop", reason });
+				console.error(`[pluto/lifecycle] ENGAGEMENT STOPPED (headless) — ${reason}`);
+				ctx.shutdown();
+				return { block: true, terminate: true, reason: `Engagement stopped — ${reason} (§10.5). No operator is present in headless mode to resume; halting rather than burning budget against an untestable target.` };
 			}
 			return {
 				block: true,

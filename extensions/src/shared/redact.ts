@@ -30,19 +30,33 @@ const PATTERNS: Array<[RegExp, string]> = [
 	[/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED AWS KEY]"],
 ];
 
-const MAX_FIELD = 16_000; // per-line cap on logged tool output
-
 /** Redact high-confidence secret shapes, and mask any explicitly-known secret
- * values, in a log line. Then cap the length so a large dump can't bloat the
- * audit log. `known` are exact secret strings (e.g. recovered credentials). */
+ * values (e.g. recovered credentials), in a string. Masking only — it does NOT
+ * truncate, so a caller can run it over a serialized JSON line without breaking
+ * the JSON (size-cap the oversized FIELD first with capField, then redact). */
 export function redactSecrets(text: string, known: readonly string[] = []): string {
 	let out = text;
 	for (const [re, repl] of PATTERNS) out = out.replace(re, repl);
 	for (const secret of known) {
 		if (secret && secret.length >= 3) out = out.split(secret).join("[REDACTED]");
 	}
-	if (out.length > MAX_FIELD) {
-		out = `${out.slice(0, MAX_FIELD)}…[+${out.length - MAX_FIELD} bytes truncated]`;
-	}
 	return out;
+}
+
+const MAX_FIELD = 16_000; // per-FIELD cap on logged tool output
+
+/** Cap a single logged value's serialized size so a large dump (a full pcap,
+ * a file read) can't bloat the audit log. Applied to the field BEFORE the entry
+ * is serialized, so the resulting JSONL line stays valid — capping the whole
+ * serialized line (as before) truncated mid-string and produced unparseable
+ * records. Returns the value unchanged when small, or a truncation marker. */
+export function capField(value: unknown, max: number = MAX_FIELD): unknown {
+	let s: string;
+	try {
+		s = typeof value === "string" ? value : JSON.stringify(value);
+	} catch {
+		return value;
+	}
+	if (s === undefined || s.length <= max) return value;
+	return `${s.slice(0, max)}…[+${s.length - max} bytes truncated]`;
 }

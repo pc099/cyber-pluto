@@ -9,9 +9,10 @@
 export interface HardCaps {
 	maxToolCalls: number;
 	maxWallClockSeconds: number;
-	/** Cumulative-token ceiling. Cost — not tool-count — is the binding
-	 * constraint on a metered provider (a runaway once hit ~24M tokens, ~97%
-	 * cache reads), so the harness caps estimated cumulative tokens too. */
+	/** Ceiling on estimated context throughput (Σ context size per turn). This
+	 * OVER-estimates dollar spend (cache reads bill far below full price), so it
+	 * is a conservative safety ceiling, not a bill — the binding constraint on a
+	 * metered provider is cost, and a runaway once hit ~24M tokens of context. */
 	maxTokens: number;
 }
 
@@ -32,7 +33,7 @@ export function checkHardCaps(toolCallCount: number, elapsedSeconds: number, bil
 		return {
 			stop: true,
 			kind: "tokens",
-			reason: `token/cost cap reached (~${(billedTokens / 1e6).toFixed(1)}M/${(caps.maxTokens / 1e6).toFixed(1)}M tokens)`,
+			reason: `context-token ceiling reached (~${(billedTokens / 1e6).toFixed(1)}M/${(caps.maxTokens / 1e6).toFixed(1)}M est. context tokens — a conservative over-estimate, not a bill)`,
 		};
 	}
 	return { stop: false };

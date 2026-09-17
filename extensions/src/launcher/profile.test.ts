@@ -31,13 +31,24 @@ test("the harness profile is valid JSON and declares the full stack", () => {
 	assert.ok(p.defaultProvider, "profile must set a default provider");
 });
 
-test("every extension the profile declares exists and exports a default", () => {
+test("every extension the profile declares exists on disk", () => {
 	for (const rel of profile().extensions ?? []) {
 		// paths in .pi/settings.json resolve relative to the .pi/ dir
-		const abs = resolve(PI_DIR, rel);
-		assert.ok(existsSync(abs), `profile extension missing on disk: ${rel} (${abs})`);
-		const src = readFileSync(abs, "utf8");
-		assert.ok(/export\s+default\s+function/.test(src), `profile extension has no default export (not a Pi extension): ${rel}`);
+		assert.ok(existsSync(resolve(PI_DIR, rel)), `profile extension missing on disk: ${rel}`);
+	}
+});
+
+test("every extension the profile declares actually IMPORTS and default-exports a function", async () => {
+	// Import the COMPILED module (not a grep) so a load-time throw, a broken
+	// relative import, or a non-function default is caught — the real "the
+	// harness silently lost a capability" failure class. Maps src/X/index.ts (the
+	// jiti-loaded runtime path) to its built dist/X/index.js for a clean import.
+	for (const rel of profile().extensions ?? []) {
+		const srcAbs = resolve(PI_DIR, rel);
+		const distAbs = srcAbs.replace(`${REPO}/extensions/src/`, `${REPO}/extensions/dist/`).replace(/\.ts$/, ".js");
+		assert.ok(existsSync(distAbs), `built extension missing (run npm run build): ${distAbs}`);
+		const mod = (await import(distAbs)) as { default?: unknown };
+		assert.equal(typeof mod.default, "function", `profile extension has no callable default export: ${rel}`);
 	}
 });
 
