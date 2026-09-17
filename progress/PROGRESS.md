@@ -9,7 +9,8 @@
 - **Next concrete action:** Re-run against **real HTB Cap** once VPN works (HTB VIP or a residential/tunnel egress — the operator plans reverse-SSH via their laptop's residential IP + `nmap -sT`). Post-plan backlog: **containerize Pluto** (runs as root on the VPS today — top hardening item, and why OS-level privesc is circular locally); wire the blind SQLi/SSRF TS validators onto the §4.7 OOB server; finish remaining vuln-class validators (XXE, deserialization, auth, privesc) + skill entries; KB beyond CISA KEV (WSTG/PentestMonkey/CAPEC + fastembed); a universal enforcing HTTP proxy for bug-bounty rate/header on bash tools (today briefed + enforced only on Pluto's own fetches).
 
 ## In flight (granular — what is being done *right now*)
-- (nothing — harness interface committed in iterations; see Done)
+- **Sandbox v0 QA-VERIFIED** (inline, 11/11): agent can't write the harness tree, can't reach out-of-scope (curl/nc/raw-socket/DNS dropped), setuid ping caught by no_new_privs, can't flush egress, can't delete the kill switch. The one scary result (nft flush) was a TEST ARTIFACT (nft not on pluto PATH), confirmed by rigorous re-test. Full 4-agent board pass DEFERRED — subagents rate-limited (account session limit, resets 7:20am UTC).
+- **MCP integration: RESEARCHED + proposal drafted, NOT built** (`docs/proposals/mcp-integration.md`). Verified in Pi source: Pi has NO native MCP (1 incidental comment); the seam is a `registerTool()` MCP-client bridge; and red-lines DOES gate custom tools (`beforeToolCall` fires tool_call for every tool). It's consequential + security-touching, so it goes through the board — boarding when the rate limit resets. Not building it unreviewed.
 
 ## Done (most recent first — with commit hash)
 - **Operator harness interface (post-plan, Camp-1 / CAI-style) — committed in iterations:**
