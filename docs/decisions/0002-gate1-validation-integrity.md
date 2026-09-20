@@ -1,11 +1,11 @@
 # Decision 0002 — Gate-1 validation integrity (Item-0 follow-on)
 
-**Status:** PROVISIONAL. Board huddle Round 1 complete for 3 of 4 members
-(harness-architect, cybersecurity, griller). The **QA-tester** agent hit the
-Anthropic **session rate limit** (resets 09:30 UTC) and did not return; a
-**Round 2 cross-reaction** has not been run. Do NOT treat this as ratified —
-per the board process, changes wait until all four agree. This records the
-strong Round-1 convergence so it isn't lost.
+**Status:** RATIFIED (all four members). Round 1 returned from harness-architect,
+cybersecurity, and griller; the QA-tester (initially rate-limited) returned on
+retry with a cross-aware position reacting to the other three — serving as the
+huddle's cross-reaction. The four converge on a **sharpened Option D** with QA's
+testing guardrails; no unresolved disagreement remains. QA holds a hard **NO-GO
+on any "tamper-proof" claim** until the red-team sentinel (below) flips red.
 
 Proposal under review: `docs/proposals/gate1-validation-integrity.md`.
 
@@ -76,14 +76,59 @@ Proposal under review: `docs/proposals/gate1-validation-integrity.md`.
 - **Re-sequence the roadmap:** ungated-report fix **first**, then this
   follow-on's cheap slices, then Shodan.
 
-## Still OWED before ratification (honesty)
+## QA-tester position (the fourth voice) — resolves the open items
 
-- **QA-tester Round 1** (rate-limited): the exact runnable red-team acceptance
-  test (forge a `passed` validations row + evidence → prove it can no longer
-  reach a signed, submittable `validated`), and which options are *testable*
-  vs rest on unfalsifiable human diligence. Griller also demanded this script be
-  shipped *now* to convert "we think it's residual" into a measured fact.
-- **Round 2 cross-reaction:** the three positions converged but have not
-  explicitly reacted to each other; the biggest unresolved tension is whether the
-  evidence-hash slice (#4) is worth building before QA defines the acceptance
-  test. Run after the rate limit resets.
+- **Ship the red-team forge SENTINEL now** (risk-free, gates everything). Run as
+  `pluto` against a real DB + live daemon: create a candidate → `INSERT` a
+  `passed` validations row (no real validator ran) → write self-consistent fake
+  evidence → call the REAL signer → `promote()`. **Today the pass criterion is
+  that the forge SUCCEEDS** (reaches a signed, submittable `validated`): the test
+  documents the open hole as a standing assertion. A real fix (B/A) later flips
+  exactly that assertion to "signer refuses / not trustworthy". If a change can't
+  flip it, it didn't close the forge. This converts "we think it's residual" into
+  a measured fact.
+- **C is NOT testable as security** — only its plumbing is (`listUntrustedValidated`
+  rows, advisory rendering, the Gate-2 authentic-vs-genuine warning actually
+  displaying). QA will **block any commit/doc that calls C a mitigation of this
+  forge.**
+- **Evidence-hash slice: GO to build, with a pinned limit.** Test: mutate an
+  evidence byte post-sign → verification flips false. **Mandatory second
+  assertion:** a *pre-sign* forge with self-consistent bytes STILL passes (the
+  hash is over pluto's own fake bytes). Build it AFTER the sentinel so the
+  sentinel pins its exact limit and it isn't oversold.
+- **Correction to griller's "append-only root-owned evidence":** that only helps
+  if **root** writes the true wire bytes; if `pluto` writes into a root-owned
+  append-only file it still controls the content → tamper-*evident* again, not
+  proof. Any such slice's QA test must prove root, not pluto, is the writer.
+- **Only Option B (or A) flips the sentinel** for network-observable classes.
+  Hash + C + OOB-for-blind leave the network-class assertion green (forgeable).
+  For blind/§4.7 classes the OOB collector needs its own forge test (fake
+  callback receipt written by pluto vs the root listener's own record).
+
+## RATIFIED decision (sharpened D + QA guardrails)
+
+1. **Reject Option A.** (Root target I/O bypasses the pluto egress allowlist —
+   net safety loss; also offensive execution as root.) Firm, unanimous.
+2. **Build order, gated by QA:**
+   - **(a) NOW — the red-team forge sentinel test** (a committed characterization
+     test asserting the residual currently reaches a signed/submittable
+     `validated`, plus a regression guard that the Item-0 direct flip is still
+     caught). Risk-free; makes the residual a measured, watched fact.
+   - **(b) Evidence-content-hash bound into the signed claim** — with the
+     limit-pinning test (post-sign tamper caught; pre-sign self-consistent forge
+     still passes). Never described as closing the forge.
+   - **(c) C strictly as documented posture** — advisory rendering + Gate-2
+     authentic-vs-genuine warning; claim **no** security beyond Item 0. (Cockpit
+     enforcement + `listUntrustedValidated` surfacing already shipped this
+     session in `7e4bdff`.)
+   - **(d) Later / medium — root-owned OOB collector** for blind classes (the one
+     cheap genuinely-tamper-proof slice), with its own forge test.
+   - **Defer the general capture-proxy (B-for-network-classes)** — a large
+     re-architecture with a new root-side parsing-of-attacker-bytes LPE surface;
+     scope it separately, only if agent-efficiency (not safety) demands it.
+3. **Naming discipline (QA hard NO-GO):** Gate 1 stays **tamper-EVIDENT**, never
+   called **tamper-PROOF**, until the sentinel's core assertion goes red for the
+   class in question. Only B/A can do that.
+4. **Re-sequence vs other work:** the ungated free-text report bug (higher
+   priority than this follow-on per the board) was FIXED this session
+   (`5ca5b6c`). Shodan REST extension follows this follow-on's cheap slices.
