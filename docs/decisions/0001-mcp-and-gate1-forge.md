@@ -72,7 +72,29 @@ MCP-bridge approval during the huddle.
 
 ## Status
 
-Ratified; not yet built. **Item 0 is the next build** and is a security-critical
-architectural change to be built carefully (privileged signer + signed
-promotions + consumer verification + tests), not rushed. The Shodan REST
-extension follows Item 0.
+Ratified. **Item 0 BUILT (direct-flip forge closed)** in 6 committed increments
+(`f0cf4c6`→`3e67f15`): crypto core → state plumbing (`promotions` table) →
+privileged root signer → consumer enforcement at Gate 2. 73/73 tests;
+live-verified on the box with the real `sqlite3 "UPDATE ... status='validated'"`
+attack (untrusted, flagged, Gate-2 refused). The Shodan REST extension follows.
+
+### Implementation correction (honesty note)
+
+The ratified remedy named a "privileged asymmetric-signed promotion path" and an
+early sketch used a **sudoers-pinned helper**. A live test on the box disproved
+that mechanism: the sandbox runs the agent under `setpriv --no-new-privs`, which
+disables setuid and therefore **sudo** (`sudo: "no new privileges" flag is
+set…`). The signer was implemented instead as a **resident root daemon on a unix
+socket** in the pluto-writable engagement dir — reaching a socket needs no
+privilege escalation, so it works under `no_new_privs`. The cryptographic
+design (root-held ed25519 key, DB-derived signed claims, public-key
+verification) is unchanged.
+
+### Scope boundary (unchanged, honest)
+
+Item 0 makes Gate 1 tamper-**EVIDENT** against the direct `UPDATE
+status='validated'` flip — NOT tamper-**PROOF**. The `validations` table is also
+pluto-writable, so a forged `passed` validation row can still obtain a legitimate
+signature. Fully closing Gate 1 requires the validator to RE-RUN under root
+(privileged re-validation) — tracked as the **Item-0 follow-on**, a larger
+re-architecture, not part of Item 0.
