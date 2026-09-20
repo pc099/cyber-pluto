@@ -8,11 +8,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { evidenceBaseDir } from "../state/db.js";
 import type { Engagement } from "../state/engagement.js";
 import { IllegalStatusTransition } from "../state/findings-repo.js";
 import type { CapturedExchange, VerifiableStep } from "./report.js";
 
-const EVIDENCE_DIR = "evidence/validations";
+const evidenceDir = (): string => join(evidenceBaseDir(), "validations");
 
 export interface GateReport {
 	validator: string;
@@ -25,7 +26,7 @@ export interface GateReport {
 
 async function writeEvidence(cwd: string, findingId: number, report: GateReport): Promise<{ baselineRef: string; attackRef: string }> {
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-	const relDir = join(EVIDENCE_DIR, `finding-${findingId}-${report.validator}-${stamp}`);
+	const relDir = join(evidenceDir(), `finding-${findingId}-${report.validator}-${stamp}`);
 	await mkdir(join(cwd, relDir), { recursive: true });
 	const baselineRef = join(relDir, "baseline.json");
 	const attackRef = join(relDir, "attacks.json");

@@ -16,10 +16,11 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { evidenceBaseDir } from "../state/db.js";
 
 const execFileAsync = promisify(execFile);
 
-const EVIDENCE_DIR = "evidence/screenshots";
+const evidenceDir = (): string => join(evidenceBaseDir(), "screenshots");
 const CAPTURE_TIMEOUT_MS = 45000;
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 900;
@@ -59,9 +60,9 @@ export async function captureScreenshot(cwd: string, url: string, opts: CaptureO
 	const width = opts.width ?? DEFAULT_WIDTH;
 	const height = opts.height ?? DEFAULT_HEIGHT;
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-	const relPath = join(EVIDENCE_DIR, `shot-${stamp}-${Math.random().toString(36).slice(2, 8)}.png`);
+	const relPath = join(evidenceDir(), `shot-${stamp}-${Math.random().toString(36).slice(2, 8)}.png`);
 	const absPath = join(cwd, relPath);
-	await mkdir(join(cwd, EVIDENCE_DIR), { recursive: true });
+	await mkdir(join(cwd, evidenceDir()), { recursive: true });
 
 	const args = [
 		"--headless",

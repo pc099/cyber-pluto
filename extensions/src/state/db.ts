@@ -49,6 +49,20 @@ export function logDir(cwd: string): string {
 }
 
 /**
+ * The engagement's evidence base dir, RELATIVE to cwd — so stored evidence refs
+ * (validations.baseline_ref/attack_ref, screenshots.path, attempts output) stay
+ * cwd-relative and resolvable by any consumer running with cwd = repo. Honors
+ * `PLUTO_EVIDENCE_DIR` (per-engagement, e.g. `engagements/<label>/evidence`);
+ * defaults to `evidence`. Same read-only-under-sandbox rationale as logDir: the
+ * repo-root `evidence/` is bind-mounted read-only under --sandbox, so writing
+ * there fails silently and Gate-1 evidence capture is lost — redirecting to the
+ * pluto-writable engagement dir keeps it working in confined mode.
+ */
+export function evidenceBaseDir(): string {
+	return process.env["PLUTO_EVIDENCE_DIR"] ?? "evidence";
+}
+
+/**
  * Opens (creating if absent) the engagement's SQLite state DB and applies the
  * Layer 2 schema idempotently.
  *

@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { logDir } from "./db.js";
+import { evidenceBaseDir, logDir } from "./db.js";
 
 test("logDir defaults to repo-root logs/ when PLUTO_LOG_DIR is unset (non-sandbox, unchanged)", () => {
 	const saved = process.env["PLUTO_LOG_DIR"];
@@ -26,5 +26,26 @@ test("logDir honors PLUTO_LOG_DIR (the sandbox-writable redirect)", () => {
 	} finally {
 		if (saved === undefined) delete process.env["PLUTO_LOG_DIR"];
 		else process.env["PLUTO_LOG_DIR"] = saved;
+	}
+});
+
+test("evidenceBaseDir defaults to a cwd-relative 'evidence' (refs stay resolvable)", () => {
+	const saved = process.env["PLUTO_EVIDENCE_DIR"];
+	delete process.env["PLUTO_EVIDENCE_DIR"];
+	try {
+		assert.equal(evidenceBaseDir(), "evidence");
+	} finally {
+		if (saved !== undefined) process.env["PLUTO_EVIDENCE_DIR"] = saved;
+	}
+});
+
+test("evidenceBaseDir honors PLUTO_EVIDENCE_DIR (keeps Gate-1 evidence writable under --sandbox)", () => {
+	const saved = process.env["PLUTO_EVIDENCE_DIR"];
+	process.env["PLUTO_EVIDENCE_DIR"] = "engagements/box1/evidence";
+	try {
+		assert.equal(evidenceBaseDir(), "engagements/box1/evidence");
+	} finally {
+		if (saved === undefined) delete process.env["PLUTO_EVIDENCE_DIR"];
+		else process.env["PLUTO_EVIDENCE_DIR"] = saved;
 	}
 });

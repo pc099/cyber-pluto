@@ -181,6 +181,10 @@ export function buildPlan(argv: string[]): ParseResult {
 		// audit + disclosure trail is lost; the engagement dir is writable + bound
 		// in, keeping "everything is logged" true in confined mode.
 		PLUTO_LOG_DIR: `engagements/${label}/logs`,
+		// Same read-only-under-sandbox rationale as PLUTO_LOG_DIR: keep Gate-1
+		// evidence capture (validators, vision, exploit) writing to a pluto-writable
+		// per-engagement dir instead of the read-only repo-root evidence/.
+		PLUTO_EVIDENCE_DIR: `engagements/${label}/evidence`,
 	};
 	if (model) env.PLUTO_SUBAGENT_MODEL = model;
 	if (attackProvider) env.PLUTO_ATTACK_PROVIDER = attackProvider;

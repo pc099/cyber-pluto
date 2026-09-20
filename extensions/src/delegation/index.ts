@@ -20,10 +20,11 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { evidenceBaseDir } from "../state/db.js";
 import { getEngagement, startEngagement } from "../state/engagement.js";
 import { spawnSubAgent } from "./spawn.js";
 
-const EVIDENCE_DIR = "evidence/delegations";
+const evidenceDir = (): string => join(evidenceBaseDir(), "delegations");
 const LOG_DIR = "logs";
 const LOG_FILE = "delegations.jsonl";
 
@@ -34,9 +35,9 @@ async function logDelegation(
 	attemptId: number | undefined,
 ): Promise<string> {
 	// Retain the full sub-agent output as evidence.
-	const rel = join(EVIDENCE_DIR, `delegation-${attemptId ?? Date.now()}.txt`);
+	const rel = join(evidenceDir(), `delegation-${attemptId ?? Date.now()}.txt`);
 	try {
-		await mkdir(join(cwd, EVIDENCE_DIR), { recursive: true });
+		await mkdir(join(cwd, evidenceDir()), { recursive: true });
 		await writeFile(join(cwd, rel), run.output, "utf8");
 	} catch (err) {
 		console.error("[pluto/delegation] failed to write delegation evidence:", err);
