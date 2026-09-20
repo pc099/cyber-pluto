@@ -76,9 +76,10 @@ function refreshWidget(ctx: ExtensionContext): void {
 	const c = e.repos.findings.countByStatus(e.targetId);
 	const cap = Number(process.env["PLUTO_MAX_TOOL_CALLS"] ?? 200);
 	const cost = readCost(ctx.cwd);
+	const untrusted = e.repos.findings.listUntrustedValidated(e.targetId).length;
 	ctx.ui.setWidget("pluto-status", [
 		`🪐 pluto · ${t?.host ?? t?.label ?? "?"} · phase ${t?.phase ?? "recon"}`,
-		`findings ✓${c.validated} ?${c.candidate} →${c.submitted} ✗${c.rejected} · tree ${e.repos.nodes.countByTarget(e.targetId)} · creds ${e.repos.credentials.countByTarget(e.targetId)} · calls ${e.repos.attempts.countByTarget(e.targetId)}/${cap}${cost ? ` · ~${fmtTokens(cost.contextTokensSeen)} tok` : ""}`,
+		`findings ✓${c.validated} ?${c.candidate} →${c.submitted} ✗${c.rejected}${untrusted ? ` ⚠${untrusted}` : ""} · tree ${e.repos.nodes.countByTarget(e.targetId)} · creds ${e.repos.credentials.countByTarget(e.targetId)} · calls ${e.repos.attempts.countByTarget(e.targetId)}/${cap}${cost ? ` · ~${fmtTokens(cost.contextTokensSeen)} tok` : ""}`,
 	]);
 }
 
@@ -89,10 +90,12 @@ async function showStatus(ctx: ExtensionCommandContext): Promise<void> {
 	if (!e) return void ctx.ui.notify("No engagement open.", "warning");
 	const t = e.repos.targets.getById(e.targetId);
 	const c = e.repos.findings.countByStatus(e.targetId);
+	const untrusted = e.repos.findings.listUntrustedValidated(e.targetId).length;
 	await ctx.ui.select("Engagement status", [
 		`target    ${t?.host ?? t?.label}  (phase ${t?.phase ?? "recon"})`,
 		`scope     ${t?.scope_notes ?? process.env["PLUTO_SCOPE_HOSTS"] ?? t?.host ?? "?"}`,
 		`findings  validated ${c.validated} · candidate ${c.candidate} · submitted ${c.submitted} · rejected ${c.rejected}`,
+		...(untrusted > 0 ? [`⚠ UNVERIFIED  ${untrusted} finding(s) read 'validated' but FAIL Gate-1 signature (possible tampering)`] : []),
 		`tree      ${e.repos.nodes.countByTarget(e.targetId)} nodes`,
 		`creds     ${e.repos.credentials.countByTarget(e.targetId)}`,
 		`calls     ${e.repos.attempts.countByTarget(e.targetId)} / ${process.env["PLUTO_MAX_TOOL_CALLS"] ?? 200}`,
@@ -106,16 +109,29 @@ async function doReport(ctx: ExtensionCommandContext, e: Engagement, findingId: 
 	if (!finding) return void ctx.ui.notify(`No finding #${findingId}.`, "warning");
 	const target = e.repos.targets.getById(finding.target_id);
 	if (!target) return void ctx.ui.notify("No target for finding.", "error");
+	// Item-0 enforcement at the report consumer: a finding can read 'validated'
+	// in the pluto-writable DB without a valid Gate-1 promotion signature (a
+	// forge). Carry the verdict into the report so a forged one is never dressed
+	// up as a genuine submission-ready finding.
+	const trustworthy = e.repos.findings.isValidatedTrustworthy(findingId);
 	const md = buildFindingReport({
 		finding,
 		target,
 		validations: e.repos.validations.listByFinding(findingId),
 		credentials: e.repos.credentials.listByTarget(finding.target_id),
+		trustworthy,
 	});
 	const rel = join(REPORTS_DIR, `finding-${findingId}.md`);
 	await mkdir(join(ctx.cwd, REPORTS_DIR), { recursive: true });
 	await writeFile(join(ctx.cwd, rel), md, "utf8");
-	ctx.ui.notify(`Report written: ${rel}`, "info");
+	if (!trustworthy) {
+		ctx.ui.notify(
+			`⚠ Report written (${rel}) but finding #${findingId}'s Gate-1 promotion signature is MISSING/INVALID — treat as UNVERIFIED (possible tampering); do NOT submit without re-validating.`,
+			"warning",
+		);
+	} else {
+		ctx.ui.notify(`Report written: ${rel}`, "info");
+	}
 }
 
 async function doApprove(ctx: ExtensionCommandContext, e: Engagement, findingId: number): Promise<void> {
@@ -123,6 +139,16 @@ async function doApprove(ctx: ExtensionCommandContext, e: Engagement, findingId:
 	if (!finding) return void ctx.ui.notify(`No finding #${findingId}.`, "warning");
 	if (finding.status !== "validated") {
 		return void ctx.ui.notify(`Finding #${findingId} is '${finding.status}'. Only a VALIDATED finding can be approved (Gate 2).`, "warning");
+	}
+	// Gate-1 enforcement BEFORE any submissions row is written: refuse to approve
+	// a 'validated' finding whose promotion signature is missing/invalid. Checked
+	// here (not only in markSubmitted) so a forged finding never even produces a
+	// spurious approver record.
+	if (!e.repos.findings.isValidatedTrustworthy(findingId)) {
+		return void ctx.ui.notify(
+			`Finding #${findingId} reads 'validated' but its Gate-1 promotion signature is MISSING or INVALID — refusing approval (possible tampering). Re-validate it before it can be submitted.`,
+			"error",
+		);
 	}
 	const ok = await ctx.ui.confirm(
 		"Gate 2 — human approval",
@@ -143,16 +169,24 @@ async function doApprove(ctx: ExtensionCommandContext, e: Engagement, findingId:
 
 async function showFindingDetail(ctx: ExtensionCommandContext, e: Engagement, finding: FindingRow): Promise<void> {
 	const vs = e.repos.validations.listByFinding(finding.id);
+	const trustworthy = e.repos.findings.isValidatedTrustworthy(finding.id);
 	const detail = [
 		fmtFinding(finding),
+		...(finding.status === "validated" && !trustworthy
+			? ["  ⚠ UNVERIFIED — Gate-1 promotion signature missing/invalid (possible tampering)"]
+			: []),
 		...vs.map((v) => `  gate1 ${v.validator} passed=${v.passed} — ${(v.diff_summary ?? "").slice(0, 90)}`),
 		...vs.filter((v) => v.baseline_ref).map((v) => `  evidence ${v.baseline_ref}`),
 	];
 	const ACT_REPORT = "▶ Generate report";
 	const ACT_APPROVE = "▶ Approve for submission (Gate 2)";
 	const options = [...detail, "──────────"];
-	if (finding.status === "validated") options.push(ACT_REPORT, ACT_APPROVE);
-	else if (finding.status === "submitted") options.push(ACT_REPORT);
+	// A validated finding can always be reported (the report itself flags an
+	// unverified one), but only a trustworthy one may be approved for submission.
+	if (finding.status === "validated") {
+		options.push(ACT_REPORT);
+		if (trustworthy) options.push(ACT_APPROVE);
+	} else if (finding.status === "submitted") options.push(ACT_REPORT);
 	const choice = await ctx.ui.select(`Finding #${finding.id}`, options);
 	if (choice === ACT_REPORT) await doReport(ctx, e, finding.id);
 	else if (choice === ACT_APPROVE) await doApprove(ctx, e, finding.id);
@@ -239,8 +273,20 @@ async function approveMenu(ctx: ExtensionCommandContext, args: string): Promise<
 	if (!e) return void ctx.ui.notify("No engagement open.", "warning");
 	let id = firstIdArg(args);
 	if (id === undefined) {
-		const validated = e.repos.findings.listByTarget(e.targetId).filter((f) => f.status === "validated");
-		if (validated.length === 0) return void ctx.ui.notify("No validated findings awaiting approval.", "info");
+		// Only trustworthy validated findings are approvable; an unverified one
+		// cannot be submitted, so don't offer it (doApprove refuses it anyway).
+		const validated = e.repos.findings
+			.listByTarget(e.targetId)
+			.filter((f) => f.status === "validated" && e.repos.findings.isValidatedTrustworthy(f.id));
+		const untrusted = e.repos.findings.listUntrustedValidated(e.targetId).length;
+		if (validated.length === 0) {
+			return void ctx.ui.notify(
+				untrusted > 0
+					? `No approvable findings. ${untrusted} finding(s) read 'validated' but FAIL Gate-1 signature verification (possible tampering) — re-validate them.`
+					: "No validated findings awaiting approval.",
+				untrusted > 0 ? "warning" : "info",
+			);
+		}
 		const choice = await ctx.ui.select("Approve which validated finding?", validated.map(fmtFinding));
 		id = choice ? firstIdArg(choice) : undefined;
 	}
