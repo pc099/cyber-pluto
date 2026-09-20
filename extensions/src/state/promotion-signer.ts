@@ -6,11 +6,12 @@
  * Two modes, chosen by env so the private key is only ever reachable by the
  * trust level that owns it:
  *   - PLUTO_PROMOTION_SIGNER_CMD — a command (e.g.
- *     "sudo -n /opt/pluto/bin/promotion-signer") invoked with the claim JSON on
- *     stdin, returning a base64 signature on stdout. This is the SANDBOX mode:
- *     pluto cannot read the key; only the root-owned helper behind a pinned
- *     sudoers rule can sign, and it re-verifies the claim against the state DB
- *     as root before signing.
+ *     "node .../promotion-sign-client.js <socket>") invoked with the claim JSON
+ *     on stdin, returning a base64 signature on stdout. This is the SANDBOX
+ *     mode: the client talks to a resident ROOT daemon over a unix socket; pluto
+ *     cannot read the key, and the daemon re-verifies the claim against the
+ *     state DB as root before signing. A socket is used rather than sudo because
+ *     the sandbox runs under `no_new_privs`, which disables setuid (hence sudo).
  *   - PLUTO_PROMOTION_PRIVKEY — a path to an ed25519 private key readable by
  *     THIS process. Valid ONLY for a trusted single-operator root run (no
  *     sandbox); the key must not be pluto-readable, so this mode is never used
