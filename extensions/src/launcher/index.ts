@@ -282,7 +282,17 @@ async function main(): Promise<void> {
 		const attackHosts = plan.attackProvider ? (PROVIDER_HOSTS[plan.attackProvider] ?? []) : [];
 		const egress = spawnSync(join(root, "sandbox/egress.sh"), ["apply", plan.scopeHosts.join(" "), ...providerHosts, ...attackHosts], { stdio: "inherit" });
 		if (egress.status !== 0) { process.stderr.write("failed to apply egress allowlist; aborting.\n"); process.exitCode = 1; return; }
-		// 2. Run the agent confined (setpriv no_new_privs + bwrap + owner-match).
+		// 2. Inject the provider credential into the child env (never on disk,
+		//    never printed) — the confined `pluto` uid cannot read root's ~/.pi,
+		//    so root extracts the key here and passes it as the provider env var.
+		const keyEnv = PROVIDER_KEY_ENV[plan.provider ?? "anthropic"];
+		if (keyEnv && !childEnv[keyEnv]) {
+			const k = spawnSync("node", [PI_CLI, "auth", "print-api-key", "--provider", plan.provider ?? "anthropic"], { cwd: root, encoding: "utf8" });
+			const key = (k.stdout ?? "").trim();
+			if (k.status === 0 && key) childEnv[keyEnv] = key;
+			else process.stderr.write(`warning: could not extract a ${plan.provider ?? "anthropic"} key to inject; the sandboxed agent may fail to authenticate.\n`);
+		}
+		// 3. Run the agent confined (setpriv no_new_privs + bwrap + owner-match).
 		const engDir = join(root, "engagements", plan.label);
 		const child = spawn(join(root, "sandbox/run-sandboxed.sh"), [engDir, "--", "node", ...plan.cliArgs], {
 			cwd: root, stdio: "inherit", env: childEnv,
@@ -300,6 +310,16 @@ async function main(): Promise<void> {
 
 /** Provider → the API host(s) to allow through the egress firewall (resolved +
  * pinned at launch by egress.sh). The scope target is added separately. */
+/** Provider → the env var Pi reads its key from, so the root launcher can inject
+ * the stored credential into the confined child (which can't read root's ~/.pi). */
+const PROVIDER_KEY_ENV: Record<string, string> = {
+	anthropic: "ANTHROPIC_API_KEY",
+	openai: "OPENAI_API_KEY",
+	deepseek: "DEEPSEEK_API_KEY",
+	zai: "ZAI_API_KEY",
+	groq: "GROQ_API_KEY",
+};
+
 const PROVIDER_HOSTS: Record<string, string[]> = {
 	anthropic: ["api.anthropic.com"],
 	openai: ["api.openai.com"],
