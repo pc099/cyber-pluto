@@ -26,6 +26,14 @@ export function stateDir(cwd: string): string {
 	return process.env["PLUTO_STATE_DIR"] ?? join(cwd, STATE_DIR);
 }
 
+/** Absolute path to the engagement's SQLite state DB file. Exposed so a
+ * privileged out-of-process consumer (the root promotion signer) can open the
+ * same DB read-only without going through openStateDb (which applies schema and
+ * opens read-write). */
+export function stateDbPath(cwd: string): string {
+	return join(stateDir(cwd), STATE_DB_FILE);
+}
+
 /**
  * Opens (creating if absent) the engagement's SQLite state DB and applies the
  * Layer 2 schema idempotently.

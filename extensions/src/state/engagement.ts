@@ -22,6 +22,7 @@ import { type CredentialsRepo, createCredentialsRepo } from "./credentials-repo.
 import { openStateDb } from "./db.js";
 import { type FindingsRepo, createFindingsRepo } from "./findings-repo.js";
 import { type NodesRepo, createNodesRepo } from "./nodes-repo.js";
+import { resolveSigner } from "./promotion-signer.js";
 import { type ScreenshotsRepo, createScreenshotsRepo } from "./screenshots-repo.js";
 import { type SubmissionsRepo, createSubmissionsRepo } from "./submissions-repo.js";
 import { type TargetsRepo, createTargetsRepo } from "./targets-repo.js";
@@ -55,7 +56,7 @@ export function startEngagement(cwd: string): Engagement {
 		targets: createTargetsRepo(db),
 		nodes: createNodesRepo(db),
 		attempts: createAttemptsRepo(db),
-		findings: createFindingsRepo(db),
+		findings: createFindingsRepo(db, { signer: resolveSigner() }),
 		validations: createValidationsRepo(db),
 		screenshots: createScreenshotsRepo(db),
 		credentials: createCredentialsRepo(db),
