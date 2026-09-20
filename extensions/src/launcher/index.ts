@@ -299,7 +299,10 @@ async function main(): Promise<void> {
 		//    provider host(s), BEFORE the agent starts. pluto can't change it.
 		const providerHosts = PROVIDER_HOSTS[plan.provider ?? "anthropic"] ?? [];
 		const attackHosts = plan.attackProvider ? (PROVIDER_HOSTS[plan.attackProvider] ?? []) : [];
-		const egress = spawnSync(join(root, "sandbox/egress.sh"), ["apply", plan.scopeHosts.join(" "), ...providerHosts, ...attackHosts], { stdio: "inherit" });
+		// External-intel tool hosts (Shodan etc.): only allowed through egress when
+		// the tool's key is present, so an unused intel tool widens nothing.
+		const intelHosts = process.env.SHODAN_API_KEY ? (INTEL_HOSTS.shodan ?? []) : [];
+		const egress = spawnSync(join(root, "sandbox/egress.sh"), ["apply", plan.scopeHosts.join(" "), ...providerHosts, ...attackHosts, ...intelHosts], { stdio: "inherit" });
 		if (egress.status !== 0) { process.stderr.write("failed to apply egress allowlist; aborting.\n"); process.exitCode = 1; return; }
 		// 2. Inject the provider credential into the child env (never on disk,
 		//    never printed) — the confined `pluto` uid cannot read root's ~/.pi,
@@ -374,6 +377,13 @@ const PROVIDER_KEY_ENV: Record<string, string> = {
 	deepseek: "DEEPSEEK_API_KEY",
 	zai: "ZAI_API_KEY",
 	groq: "GROQ_API_KEY",
+};
+
+/** External-intel tool → the third-party API host(s) added to the egress
+ * allowlist by the root launcher when that tool's key is configured (Decision
+ * 0001: thin per-vendor REST extensions, egress-gated). */
+const INTEL_HOSTS: Record<string, string[]> = {
+	shodan: ["api.shodan.io"],
 };
 
 const PROVIDER_HOSTS: Record<string, string[]> = {

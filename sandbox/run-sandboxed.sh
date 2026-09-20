@@ -43,7 +43,7 @@ CHILD_ENV=(
 )
 # Forward PLUTO_* and provider credential envs (the only secrets, injected here).
 while IFS='=' read -r k _; do
-	case "$k" in PLUTO_*|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|OPENAI_API_KEY|DEEPSEEK_API_KEY|ZAI_API_KEY|GROQ_API_KEY) CHILD_ENV+=("$k=${!k}");; esac
+	case "$k" in PLUTO_*|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|OPENAI_API_KEY|DEEPSEEK_API_KEY|ZAI_API_KEY|GROQ_API_KEY|SHODAN_API_KEY) CHILD_ENV+=("$k=${!k}");; esac
 done < <(env)
 
 DROP=(setpriv --no-new-privs --reuid "$UIDNAME" --regid "$UIDNAME" --init-groups --)

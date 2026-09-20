@@ -12,7 +12,8 @@
     "../extensions/src/lifecycle/index.ts",
     "../extensions/src/cockpit/index.ts",
     "../extensions/src/delegation/index.ts",
-    "../extensions/src/capabilities/index.ts"
+    "../extensions/src/capabilities/index.ts",
+    "../extensions/src/shodan/index.ts"
   ],
   "skills": [
     "../runtime-skills"
