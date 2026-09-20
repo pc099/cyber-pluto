@@ -37,6 +37,32 @@ find "$DEPLOY" -type d -exec chmod o+rx,g+rx {} +   # pluto can read + traverse
 echo "[*] pluto-writable workspace: $DEPLOY/engagements"
 mkdir -p "$DEPLOY/engagements"; chown "$UIDNAME":"$UIDNAME" "$DEPLOY/engagements"; chmod 0770 "$DEPLOY/engagements"
 
+echo "[*] Gate-1 promotion signing keypair (Item 0)"
+# The PRIVATE key lives OUTSIDE the pluto-readable tree and is root-only (0400),
+# so the confined agent can never read it — it can only ask the root signing
+# daemon (started by the launcher) to sign, over a unix socket. The PUBLIC key is
+# world-readable so consumers can verify. Verified on the box: pluto gets
+# "Permission denied" on the private key but CAN sign through the socket under
+# no_new_privs (sudo is unavailable there — setuid is disabled).
+KEYDIR="${PLUTO_KEYDIR:-/etc/cyber-pluto}"
+PRIV="$KEYDIR/promotion_ed25519.key"
+PUB="$KEYDIR/promotion_ed25519.pub"
+mkdir -p "$KEYDIR"; chmod 0755 "$KEYDIR"   # traversable, but the key itself is 0400
+if [[ -f "$PRIV" ]]; then
+	echo "    keypair already present at $PRIV (leaving it; delete to rotate)"
+else
+	command -v openssl >/dev/null || { echo "openssl not found; cannot generate the signing key" >&2; exit 1; }
+	openssl genpkey -algorithm ed25519 -out "$PRIV"
+	openssl pkey -in "$PRIV" -pubout -out "$PUB"
+	chown root:root "$PRIV" "$PUB"; chmod 0400 "$PRIV"; chmod 0444 "$PUB"
+	echo "    private (root-only 0400): $PRIV"
+	echo "    public  (world-read 0444): $PUB"
+fi
+# The launcher reads the private key from PROMOTION_PRIVKEY_DEFAULT
+# (/etc/cyber-pluto/promotion_ed25519.key) unless PLUTO_PROMOTION_PRIVKEY is set.
+[[ "$PRIV" == "/etc/cyber-pluto/promotion_ed25519.key" ]] || \
+	echo "    NOTE: non-default key path — export PLUTO_PROMOTION_PRIVKEY=$PRIV when launching."
+
 echo
 echo "  ✅ setup complete."
 echo "  Run a sandboxed engagement (as root — it drops to $UIDNAME):"

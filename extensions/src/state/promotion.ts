@@ -10,7 +10,8 @@
  *
  * THE MECHANISM: every legitimate promotion is signed with an **ed25519 private
  * key held by root, outside `pluto`'s reach** (signing happens in a privileged
- * step — see sandbox/promotion-signer). Consumers verify with the PUBLIC key
+ * step — a resident root daemon reached over a unix socket, since the sandbox's
+ * no_new_privs disables sudo; see promotion-sign-daemon.ts). Consumers verify with the PUBLIC key
  * (readable). A `validated` row whose signature is missing or invalid is treated
  * as TAMPERED — demoted to candidate for trust purposes and flagged. A raw
  * `UPDATE status='validated'` produces no valid signature, so it is inert.

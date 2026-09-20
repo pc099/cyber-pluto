@@ -13,10 +13,28 @@
  * not left as untestable shell.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const PI_CLI = "pi/pi/packages/coding-agent/dist/bundle/cli.js";
+// Gate-1 privileged promotion signer (Item 0). The private key lives OUTSIDE the
+// pluto-readable harness tree (setup.sh installs it root-only); the daemon holds
+// it and the confined agent reaches it only through the socket + client.
+const PROMOTION_PRIVKEY_DEFAULT = "/etc/cyber-pluto/promotion_ed25519.key";
+const PROMOTION_DAEMON_JS = "extensions/dist/state/promotion-sign-daemon.js";
+const PROMOTION_CLIENT_JS = "extensions/dist/state/promotion-sign-client.js";
+
+/** Block (without async) until a path exists or the timeout elapses — used to
+ * wait for the signing daemon's socket before starting the confined agent. */
+function waitForPathSync(path: string, timeoutMs = 5000): boolean {
+	const deadline = Date.now() + timeoutMs;
+	const pause = new Int32Array(new SharedArrayBuffer(4));
+	while (Date.now() < deadline) {
+		if (existsSync(path)) return true;
+		Atomics.wait(pause, 0, 0, 40);
+	}
+	return existsSync(path);
+}
 
 export interface LaunchPlan {
 	target: string;
@@ -292,12 +310,45 @@ async function main(): Promise<void> {
 			if (k.status === 0 && key) childEnv[keyEnv] = key;
 			else process.stderr.write(`warning: could not extract a ${plan.provider ?? "anthropic"} key to inject; the sandboxed agent may fail to authenticate.\n`);
 		}
-		// 3. Run the agent confined (setpriv no_new_privs + bwrap + owner-match).
+		// 3. Start the PRIVILEGED Gate-1 signing daemon as root, BEFORE dropping to
+		//    pluto. It holds the promotion private key (which lives outside the
+		//    pluto-readable tree) and listens on a socket in the pluto-writable
+		//    engagement dir. The confined agent reaches it via the client — never
+		//    sudo, which no_new_privs disables. If the key is absent the daemon is
+		//    skipped and promotions are recorded UNSIGNED (consumer enforcement
+		//    then treats them as untrusted); we warn loudly rather than fail.
 		const engDir = join(root, "engagements", plan.label);
+		mkdirSync(engDir, { recursive: true });
+		const privKey = process.env.PLUTO_PROMOTION_PRIVKEY ?? PROMOTION_PRIVKEY_DEFAULT;
+		const signSock = join(engDir, ".pluto-sign.sock");
+		let signDaemon: ReturnType<typeof spawn> | undefined;
+		if (existsSync(privKey)) {
+			// The daemon needs the key + the SAME state-dir view as the agent, but
+			// the child (pluto) env must NOT carry the private key.
+			const daemonEnv = { ...process.env, ...plan.env, PLUTO_PROMOTION_PRIVKEY: privKey, PLUTO_CWD: root };
+			signDaemon = spawn("node", [join(root, PROMOTION_DAEMON_JS), signSock], {
+				cwd: root, stdio: ["ignore", "ignore", "inherit"], env: daemonEnv,
+			});
+			if (!waitForPathSync(signSock)) {
+				process.stderr.write("promotion signing daemon did not come up; aborting (would run without Gate-1 signing).\n");
+				signDaemon.kill("SIGTERM");
+				spawnSync(join(root, "sandbox/egress.sh"), ["teardown"], { stdio: "ignore" });
+				process.exitCode = 1; return;
+			}
+			// Point the confined agent at the client (reached via the sync CMD
+			// signer). The key never enters the child env.
+			childEnv.PLUTO_PROMOTION_SIGNER_CMD = `${process.execPath} ${join(root, PROMOTION_CLIENT_JS)} ${signSock}`;
+		} else {
+			process.stderr.write(
+				`warning: promotion private key ${privKey} not found — running WITHOUT Gate-1 signing (promotions will be unsigned/untrusted). Run sandbox/setup.sh to generate it.\n`,
+			);
+		}
+		// 4. Run the agent confined (setpriv no_new_privs + bwrap + owner-match).
 		const child = spawn(join(root, "sandbox/run-sandboxed.sh"), [engDir, "--", "node", ...plan.cliArgs], {
 			cwd: root, stdio: "inherit", env: childEnv,
 		});
 		child.on("exit", (code) => {
+			signDaemon?.kill("SIGTERM");
 			spawnSync(join(root, "sandbox/egress.sh"), ["teardown"], { stdio: "ignore" });
 			process.exitCode = code ?? 0;
 		});

@@ -68,9 +68,38 @@ run removes the egress table.
 
 ## Scripts
 
-- `setup.sh` — create `pluto`, deploy to a traversable path, freeze the tree.
+- `setup.sh` — create `pluto`, deploy to a traversable path, freeze the tree,
+  and generate the Gate-1 promotion signing keypair (see below).
 - `egress.sh apply "<scope hosts/CIDRs>" [provider_host…]` / `teardown` / `show`.
 - `run-sandboxed.sh <engagement_dir> -- <cmd…>` — the privilege-drop + bwrap wrapper.
+
+## Gate-1 promotion signing (Item 0)
+
+The state DB is `pluto`-writable, so a hijacked agent could forge a validated
+finding with a raw `UPDATE findings SET status='validated'`. To make that inert,
+every legitimate `candidate→validated` promotion is signed with an ed25519 key
+**held by root, outside pluto's reach**, and consumers treat an unsigned/invalid
+`validated` row as tampered.
+
+- `setup.sh` generates the keypair: the **private** key at
+  `/etc/cyber-pluto/promotion_ed25519.key` (root-only `0400`), the **public** key
+  at `…/promotion_ed25519.pub` (`0444`).
+- Under `--sandbox` the launcher starts a **root signing daemon**
+  (`promotion-sign-daemon`) before dropping to `pluto`. It holds the private key
+  and listens on a unix socket in the pluto-writable engagement dir; the confined
+  agent reaches it via `promotion-sign-client`. A socket — **not sudo** — is used
+  because the sandbox runs under `no_new_privs`, which disables setuid (hence
+  sudo). The daemon re-derives the claim from the DB and re-verifies the gate as
+  root before signing.
+- **Verified live on the box:** under `no_new_privs`, `pluto` gets *Permission
+  denied* on the private key but *can* obtain a valid signature through the
+  socket; the daemon refuses a claim for a missing/failing validation.
+- **Honest residual:** the `validations` table is also pluto-writable, so a
+  hijacked agent can forge a `passed` validation row and then obtain a legitimate
+  signature for it. This closes the direct status-flip, not the
+  forged-validation-row path — that needs privileged re-validation (Item-0
+  follow-on). Consumer enforcement (readers demoting unsigned/invalid `validated`
+  findings) is the remaining increment.
 
 ## Residual risks (on record, accepted for v0)
 
