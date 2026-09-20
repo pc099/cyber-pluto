@@ -28,6 +28,10 @@ const PATTERNS: Array<[RegExp, string]> = [
 	[/((?:-u|--user[= ])\s*[^\s:'"]+):([^\s'"]+)/gi, "$1:[REDACTED]"],
 	// AWS access key ids.
 	[/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED AWS KEY]"],
+	// Provider API keys / tokens by their distinctive prefixes (anthropic, openai,
+	// deepseek, groq, google, github, slack, and generic sk-/xai-). These have no
+	// "key=" assignment context, so the shape itself is the signal.
+	[/\b(sk-ant-[A-Za-z0-9._-]{8,}|sk-[A-Za-z0-9]{16,}|xai-[A-Za-z0-9]{16,}|gsk_[A-Za-z0-9]{16,}|AIza[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "[REDACTED KEY]"],
 ];
 
 /** Redact high-confidence secret shapes, and mask any explicitly-known secret

@@ -12,6 +12,14 @@ test("redacts high-confidence secret shapes", () => {
 	assert.equal(redactSecrets(pem), "[REDACTED PRIVATE KEY]");
 });
 
+test("redacts provider keys/tokens by prefix shape (the class of the ANTHROPIC key leak)", () => {
+	assert.match(redactSecrets("key is sk-ant-api03-pAoBI0a3vzIFlpS8BlSnj9vq0n-3QWhPVG9iV5vi and done"), /\[REDACTED KEY\]/);
+	assert.ok(!redactSecrets("sk-ant-api03-pAoBI0a3vzIFlpS8BlSnj9vq0n-3QWhPVG9iV5vi").includes("pAoBI0"));
+	for (const k of ["ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", "gsk_ABCDEFGHIJKLMNOPqrstuvwx", "xai-ABCDEFGHIJKLMNOPqrstuvwx"]) {
+		assert.match(redactSecrets(`tok=${k}`), /\[REDACTED KEY\]/);
+	}
+});
+
 test("masks explicitly-known recovered secrets", () => {
 	const out = redactSecrets("ftp login ok: nathan / Cap5t0ne_xyz", ["Cap5t0ne_xyz"]);
 	assert.ok(!out.includes("Cap5t0ne_xyz"));
