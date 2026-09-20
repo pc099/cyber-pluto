@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { PromotionClaim } from "./promotion.js";
+import type { PromotionVerifier } from "./promotion-verifier.js";
 import type { FindingRow, ValidationRow } from "./types.js";
 
 /**
@@ -78,6 +79,22 @@ export interface FindingsRepo {
 	 * `signature` against the public key to decide whether a `validated` status
 	 * is trustworthy (Item-0 increment 4). */
 	getPromotion(findingId: number): PromotionRow | undefined;
+	/**
+	 * Gate-1 enforcement (Item-0 increment 4): is this finding's `validated`
+	 * status backed by a promotion signature the root public key accepts?
+	 *   - not `validated` -> true (nothing to distrust);
+	 *   - no verifier configured (no readable public key) -> true (enforcement
+	 *     off; backward compatible, e.g. dev/tests);
+	 *   - `validated` with a verifier -> true ONLY if the recorded promotion's
+	 *     signature verifies against the reconstructed claim. A missing row, an
+	 *     unsigned row (the raw `UPDATE status='validated'` forge), or an invalid
+	 *     signature -> false.
+	 */
+	isValidatedTrustworthy(findingId: number): boolean;
+	/** Validated findings that FAIL signature verification — for the operator
+	 * readout (cockpit/report/lifecycle) to flag possible tampering. Empty when
+	 * no verifier is configured. */
+	listUntrustedValidated(targetId: number): FindingRow[];
 	/** Gate 1 rejection — `candidate` to `rejected` when the validator did not
 	 * reproduce the effect. Negative results are kept, never deleted. */
 	reject(findingId: number): FindingRow;
@@ -92,6 +109,11 @@ export interface FindingsRepoOptions {
 	/** Injected privileged signer for Gate-1 promotions. When absent, promotions
 	 * are recorded UNSIGNED (backward-compatible; non-sandbox dev/tests). */
 	signer?: PromotionSigner;
+	/** Injected verifier (public key) for consumer enforcement. When absent,
+	 * enforcement is OFF and a `validated` status is trusted as-is (backward
+	 * compatible). When present, an unsigned/invalid `validated` finding cannot be
+	 * submitted and is reported as untrusted. */
+	verifier?: PromotionVerifier;
 }
 
 export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions = {}): FindingsRepo {
@@ -120,6 +142,24 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 			throw new IllegalStatusTransition(`finding ${id} does not exist`);
 		}
 		return finding;
+	}
+
+	/** Core enforcement predicate shared by isValidatedTrustworthy(),
+	 * markSubmitted(), and listUntrustedValidated(). See the interface docstring
+	 * for the trust rules. */
+	function validatedIsTrustworthy(finding: FindingRow): boolean {
+		if (finding.status !== "validated") return true;
+		if (!opts.verifier) return true; // enforcement off (no public key)
+		const row = selectPromotion.get(finding.id) as PromotionRow | undefined;
+		if (!row) return false; // validated with no attestation at all (a raw status-flip)
+		const claim: PromotionClaim = {
+			findingId: row.finding_id,
+			validationId: row.validation_id,
+			validator: row.validator,
+			targetId: row.target_id,
+			evidenceRef: row.evidence_ref,
+		};
+		return opts.verifier(claim, row.signature);
 	}
 
 	return {
@@ -201,6 +241,15 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 		getPromotion(findingId) {
 			return selectPromotion.get(findingId) as PromotionRow | undefined;
 		},
+		isValidatedTrustworthy(findingId) {
+			return validatedIsTrustworthy(requireFinding(findingId));
+		},
+		listUntrustedValidated(targetId) {
+			if (!opts.verifier) return [];
+			return (selectByTarget.all(targetId) as unknown as FindingRow[]).filter(
+				(f) => f.status === "validated" && !validatedIsTrustworthy(f),
+			);
+		},
 		reject(findingId) {
 			const finding = requireFinding(findingId);
 			if (finding.status !== "candidate") {
@@ -216,6 +265,16 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 			if (finding.status !== "validated") {
 				throw new IllegalStatusTransition(
 					`finding ${findingId} is '${finding.status}', only a 'validated' finding can be submitted (Gate 2)`,
+				);
+			}
+			// Gate-1 enforcement at the Gate-2 boundary: a finding can read as
+			// 'validated' in the pluto-writable DB without a real promotion (a raw
+			// status-flip forge). When a verifier is configured, refuse to submit
+			// one whose promotion signature the root public key does not accept —
+			// this is where the signed-promotion mechanism becomes load-bearing.
+			if (!validatedIsTrustworthy(finding)) {
+				throw new IllegalStatusTransition(
+					`finding ${findingId} is 'validated' but its Gate-1 promotion signature is missing or invalid — refusing to submit (possible tampering)`,
 				);
 			}
 			const { changes } = updateSubmitted.run(findingId);

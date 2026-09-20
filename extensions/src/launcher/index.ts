@@ -338,6 +338,10 @@ async function main(): Promise<void> {
 			// Point the confined agent at the client (reached via the sync CMD
 			// signer). The key never enters the child env.
 			childEnv.PLUTO_PROMOTION_SIGNER_CMD = `${process.execPath} ${join(root, PROMOTION_CLIENT_JS)} ${signSock}`;
+			// Turn on consumer enforcement in the child: the PUBLIC key (world-read)
+			// lets it distrust an unsigned/invalid 'validated' finding at Gate-2.
+			const pubKey = privKey.replace(/\.key$/, ".pub");
+			if (existsSync(pubKey)) childEnv.PLUTO_PROMOTION_PUBKEY = pubKey;
 		} else {
 			process.stderr.write(
 				`warning: promotion private key ${privKey} not found — running WITHOUT Gate-1 signing (promotions will be unsigned/untrusted). Run sandbox/setup.sh to generate it.\n`,
