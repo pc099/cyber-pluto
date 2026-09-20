@@ -20,17 +20,19 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { logDir } from "../state/db.js";
 import { getEngagement, startEngagement } from "../state/engagement.js";
 import { fetchShodanHost } from "./client.js";
 import { mayDiscloseIp } from "./disclosure.js";
 
-const DISCLOSURE_LOG = "logs/disclosures.jsonl";
+const DISCLOSURE_FILE = "disclosures.jsonl";
 const MAX_FINDINGS_PER_LOOKUP = 25;
 
 async function logDisclosure(cwd: string, entry: Record<string, unknown>): Promise<void> {
 	try {
-		await mkdir(join(cwd, "logs"), { recursive: true });
-		await appendFile(join(cwd, DISCLOSURE_LOG), `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`, "utf8");
+		const dir = logDir(cwd);
+		await mkdir(dir, { recursive: true });
+		await appendFile(join(dir, DISCLOSURE_FILE), `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`, "utf8");
 	} catch {
 		/* logging must never break the tool path; the attempts log also records the call */
 	}

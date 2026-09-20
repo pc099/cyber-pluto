@@ -35,6 +35,20 @@ export function stateDbPath(cwd: string): string {
 }
 
 /**
+ * The engagement's log directory (audit JSONL, disclosure ledger). Mirrors
+ * `stateDir`: when the launcher sets `PLUTO_LOG_DIR` (per-engagement, e.g.
+ * `engagements/<label>/logs`) writers land there instead of the repo-root
+ * `logs/`. This matters under `--sandbox`: the repo root is bind-mounted
+ * READ-ONLY, so a repo-root `logs/` write fails silently and the audit trail is
+ * lost — pointing PLUTO_LOG_DIR at the pluto-writable engagement dir keeps
+ * "everything is logged" true in confined mode. Defaults to repo-root `logs/`
+ * for non-sandbox runs (unchanged behavior).
+ */
+export function logDir(cwd: string): string {
+	return process.env["PLUTO_LOG_DIR"] ?? join(cwd, "logs");
+}
+
+/**
  * Opens (creating if absent) the engagement's SQLite state DB and applies the
  * Layer 2 schema idempotently.
  *

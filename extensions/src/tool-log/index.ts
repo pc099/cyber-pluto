@@ -21,10 +21,9 @@ import type {
 	ToolCallEvent,
 	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import { logDir } from "../state/db.js";
 import { capField, redactSecrets } from "../shared/redact.js";
 import { knownSecrets, recordAttemptEnd, recordAttemptStart, startEngagement } from "./attempts-recorder.js";
-
-const LOG_DIR = "logs";
 const LOG_FILE = "tool-invocations.jsonl";
 
 interface ToolCallLogEntry {
@@ -49,7 +48,7 @@ interface ToolExecutionEndLogEntry {
 type ToolLogEntry = ToolCallLogEntry | ToolExecutionEndLogEntry;
 
 async function appendLogEntry(cwd: string, entry: ToolLogEntry): Promise<void> {
-	const dir = join(cwd, LOG_DIR);
+	const dir = logDir(cwd);
 	const file = join(dir, LOG_FILE);
 	// Mask secrets (private keys, tokens, passwords, recovered credentials)
 	// before this reaches disk — "everything is logged" must not mean "every

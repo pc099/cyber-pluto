@@ -176,6 +176,11 @@ export function buildPlan(argv: string[]): ParseResult {
 		// Control files, logs, and evidence stay at the repo root — run one
 		// engagement at a time (see state/db.ts stateDir docstring).
 		PLUTO_STATE_DIR: `engagements/${label}/state`,
+		// Per-engagement, pluto-WRITABLE log dir. Under --sandbox the repo root is
+		// bind-mounted read-only, so a repo-root logs/ write fails silently and the
+		// audit + disclosure trail is lost; the engagement dir is writable + bound
+		// in, keeping "everything is logged" true in confined mode.
+		PLUTO_LOG_DIR: `engagements/${label}/logs`,
 	};
 	if (model) env.PLUTO_SUBAGENT_MODEL = model;
 	if (attackProvider) env.PLUTO_ATTACK_PROVIDER = attackProvider;
