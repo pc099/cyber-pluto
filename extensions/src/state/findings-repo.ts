@@ -1,5 +1,30 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { PromotionClaim } from "./promotion.js";
 import type { FindingRow, ValidationRow } from "./types.js";
+
+/**
+ * A privileged signer for a Gate-1 promotion claim. Returns a base64 signature,
+ * or null when signing is unavailable. It is injected (not called in-process)
+ * so the private key never sits in the agent's realm: in the sandbox this shells
+ * to the root-held signer (Item-0 increment 3); in a trusted single-operator run
+ * root can sign directly; in dev/tests it may be absent, and promotions are then
+ * recorded UNSIGNED (an unsigned `validated` finding is untrusted by consumers).
+ */
+export type PromotionSigner = (claim: PromotionClaim) => string | null;
+
+/** A recorded Gate-1 promotion attestation (the `promotions` table). The claim
+ * fields are the exact facts the signature covers; `signature` is null when the
+ * promotion was recorded without a signer configured. */
+export interface PromotionRow {
+	id: number;
+	finding_id: number;
+	validation_id: number;
+	validator: string;
+	target_id: number;
+	evidence_ref: string;
+	signature: string | null;
+	created_at: string;
+}
 
 export interface CreateFindingInput {
 	targetId: number;
@@ -48,6 +73,11 @@ export interface FindingsRepo {
 	 * validation row first.
 	 */
 	promote(findingId: number, validationId: number): FindingRow;
+	/** The operative (latest) Gate-1 promotion attestation for a finding, or
+	 * undefined if it was never promoted through this path. Consumers verify its
+	 * `signature` against the public key to decide whether a `validated` status
+	 * is trustworthy (Item-0 increment 4). */
+	getPromotion(findingId: number): PromotionRow | undefined;
 	/** Gate 1 rejection — `candidate` to `rejected` when the validator did not
 	 * reproduce the effect. Negative results are kept, never deleted. */
 	reject(findingId: number): FindingRow;
@@ -58,7 +88,13 @@ export interface FindingsRepo {
 	countByStatus(targetId: number): { candidate: number; validated: number; submitted: number; rejected: number };
 }
 
-export function createFindingsRepo(db: DatabaseSync): FindingsRepo {
+export interface FindingsRepoOptions {
+	/** Injected privileged signer for Gate-1 promotions. When absent, promotions
+	 * are recorded UNSIGNED (backward-compatible; non-sandbox dev/tests). */
+	signer?: PromotionSigner;
+}
+
+export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions = {}): FindingsRepo {
 	const insert = db.prepare(
 		`INSERT INTO findings
 		 (target_id, node_id, port, protocol, service, product, version, honeypot_susp, confidence, status)
@@ -70,6 +106,13 @@ export function createFindingsRepo(db: DatabaseSync): FindingsRepo {
 	const updateSubmitted = db.prepare("UPDATE findings SET status = 'submitted' WHERE id = ? AND status = 'validated'");
 	const selectByTarget = db.prepare("SELECT * FROM findings WHERE target_id = ? ORDER BY id");
 	const countStatus = db.prepare("SELECT status, COUNT(*) AS c FROM findings WHERE target_id = ? GROUP BY status");
+	const insertPromotion = db.prepare(
+		`INSERT INTO promotions (finding_id, validation_id, validator, target_id, evidence_ref, signature)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+	);
+	const selectPromotion = db.prepare(
+		"SELECT * FROM promotions WHERE finding_id = ? ORDER BY id DESC LIMIT 1",
+	);
 
 	function requireFinding(id: number): FindingRow {
 		const finding = selectById.get(id) as unknown as FindingRow | undefined;
@@ -118,11 +161,45 @@ export function createFindingsRepo(db: DatabaseSync): FindingsRepo {
 					`validation ${validationId} did not pass; cannot promote finding ${findingId} to 'validated'`,
 				);
 			}
-			const { changes } = updateStatus.run("validated", findingId);
-			if (changes !== 1) {
-				throw new IllegalStatusTransition(`finding ${findingId} was not 'candidate' at promotion time`);
+			// Build and sign the attestation BEFORE flipping status: a signer fault
+			// must never leave a finding `validated` with no (or an unsigned)
+			// promotions row, which a consumer would read as tampering. The claim
+			// covers exactly the facts a consumer must trust; the signature (when a
+			// signer is configured) is what a raw `UPDATE status='validated'` cannot
+			// forge.
+			const claim: PromotionClaim = {
+				findingId,
+				validationId,
+				validator: validation.validator,
+				targetId: finding.target_id,
+				evidenceRef: validation.baseline_ref ?? validation.attack_ref ?? "",
+			};
+			let signature: string | null = null;
+			try {
+				signature = opts.signer ? opts.signer(claim) : null;
+			} catch (err) {
+				throw new IllegalStatusTransition(
+					`promotion signer failed for finding ${findingId}: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+			// Flip status and record the attestation atomically, so the two never
+			// diverge on a mid-write fault.
+			db.exec("BEGIN");
+			try {
+				const { changes } = updateStatus.run("validated", findingId);
+				if (changes !== 1) {
+					throw new IllegalStatusTransition(`finding ${findingId} was not 'candidate' at promotion time`);
+				}
+				insertPromotion.run(findingId, validationId, claim.validator, claim.targetId, claim.evidenceRef, signature);
+				db.exec("COMMIT");
+			} catch (err) {
+				db.exec("ROLLBACK");
+				throw err;
 			}
 			return requireFinding(findingId);
+		},
+		getPromotion(findingId) {
+			return selectPromotion.get(findingId) as PromotionRow | undefined;
 		},
 		reject(findingId) {
 			const finding = requireFinding(findingId);

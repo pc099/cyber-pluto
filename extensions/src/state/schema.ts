@@ -89,6 +89,27 @@ CREATE TABLE IF NOT EXISTS validations (
   validated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Gate-1 promotion attestations (board Decision 0001, Item 0). Every legitimate
+-- promotion of a finding candidate→validated records the exact claim it attests
+-- to, signed with an ed25519 key held by root, outside pluto's reach (see
+-- extensions/src/state/promotion.ts). A validated finding whose promotions row
+-- is missing, or whose signature is absent or invalid, is TAMPERED — e.g. a raw
+-- 'UPDATE findings SET status=validated' produces no signed row. This table is
+-- itself pluto-writable, but a forged row cannot carry a VALID signature (the
+-- agent has no private key), so a forged promotion is inert. One row per
+-- promotion; the latest for a finding is the operative one.
+CREATE TABLE IF NOT EXISTS promotions (
+  id            INTEGER PRIMARY KEY,
+  finding_id    INTEGER NOT NULL REFERENCES findings(id),
+  validation_id INTEGER NOT NULL REFERENCES validations(id),
+  validator     TEXT NOT NULL,
+  target_id     INTEGER NOT NULL REFERENCES targets(id),
+  evidence_ref  TEXT NOT NULL,
+  signature     TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_promotions_finding ON promotions(finding_id);
+
 CREATE TABLE IF NOT EXISTS submissions (
   id             INTEGER PRIMARY KEY,
   finding_id     INTEGER NOT NULL REFERENCES findings(id),
