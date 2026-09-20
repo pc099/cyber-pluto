@@ -14,6 +14,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Load local secrets (SHODAN_API_KEY, etc.) from .env if present, exporting them
+# into the environment the launcher inherits. .env is gitignored — never commit
+# it. Under --sandbox the launcher forwards only whitelisted keys to the child.
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 LAUNCHER="extensions/dist/launcher/index.js"
 if [[ ! -f "$LAUNCHER" ]]; then
   echo "[cyberpluto] building launcher…" >&2
