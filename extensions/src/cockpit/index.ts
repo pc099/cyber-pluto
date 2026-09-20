@@ -346,6 +346,94 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 		},
 	});
 
+	// Agent-callable, DB-GROUNDED read of the findings ledger. Without this the
+	// reasoning core had no sanctioned way to know what it had actually validated,
+	// which is how it once hand-wrote fabricated "engagement complete" free-text
+	// reports. The ledger — not the model's own narrative — is the source of truth.
+	pi.registerTool({
+		name: "list_findings",
+		label: "List Findings (ledger)",
+		description:
+			"Read the engagement's findings ledger from state (status is the fact: candidate=speculation, validated=deterministically reproduced). Use THIS, not your own memory, to know what is actually confirmed. A validated finding flagged UNVERIFIED failed Gate-1 signature verification and must not be treated as fact.",
+		parameters: Type.Object({
+			status: Type.Optional(Type.String({ description: "filter: candidate | validated | submitted | rejected" })),
+		}),
+		async execute(_id, params, _s, _u, _ctx) {
+			const e = eng();
+			if (!e) return { content: [{ type: "text", text: "No engagement DB open." }], details: {} };
+			const c = e.repos.findings.countByStatus(e.targetId);
+			let list = e.repos.findings.listByTarget(e.targetId);
+			const filter = params.status?.trim().toLowerCase();
+			if (filter) list = list.filter((f) => f.status === filter);
+			const lines = list.map((f) => {
+				const unverified = f.status === "validated" && !e.repos.findings.isValidatedTrustworthy(f.id);
+				return `${fmtFinding(f)}${unverified ? "  ⚠ UNVERIFIED (Gate-1 signature missing/invalid — NOT a fact)" : ""}`;
+			});
+			const summary = `Ledger: validated ${c.validated} · candidate ${c.candidate} · submitted ${c.submitted} · rejected ${c.rejected}`;
+			return {
+				content: [{ type: "text", text: `${summary}\n${lines.length ? lines.join("\n") : "(no findings match)"}` }],
+				details: { counts: c },
+			};
+		},
+	});
+
+	// Agent-callable report generation, constrained to VALIDATED DB FACTS. This is
+	// the ONLY sanctioned way to produce a report: it refuses anything that is not
+	// genuinely validated (and, under enforcement, signature-verified), so there
+	// is no path to a "complete" report for work that was never confirmed. A
+	// free-text file the model writes by hand is NOT an authoritative report.
+	pi.registerTool({
+		name: "generate_report",
+		label: "Generate Finding Report (Gate-1 grounded)",
+		description:
+			"Write a submission-ready Markdown report for a finding, built ONLY from its recorded Gate-1 validation + evidence. Refuses any finding that is not 'validated' (and, when signing is enabled, whose promotion signature does not verify) — do not attempt to report unconfirmed work; validate it first. Never fabricate a report by writing a file yourself.",
+		parameters: Type.Object({ finding_id: Type.Number({ description: "id of a VALIDATED finding" }) }),
+		async execute(_id, params, _s, _u, ctx) {
+			const e = eng();
+			if (!e) return { content: [{ type: "text", text: "No engagement DB open." }], details: {} };
+			const finding = e.repos.findings.getById(params.finding_id);
+			if (!finding) return { content: [{ type: "text", text: `No finding #${params.finding_id}.` }], details: {} };
+			if (finding.status !== "validated") {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Refused: finding #${params.finding_id} is '${finding.status}', not 'validated'. Only a deterministically validated finding can be reported — validate it first with the validate_* tools. No report was written.`,
+						},
+					],
+					details: { refused: true, status: finding.status },
+				};
+			}
+			if (!e.repos.findings.isValidatedTrustworthy(params.finding_id)) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Refused: finding #${params.finding_id} reads 'validated' but its Gate-1 promotion signature is missing/invalid (possible tampering). No report was written; re-validate it.`,
+						},
+					],
+					details: { refused: true, untrusted: true },
+				};
+			}
+			const target = e.repos.targets.getById(finding.target_id);
+			if (!target) return { content: [{ type: "text", text: "No target for finding." }], details: {} };
+			const md = buildFindingReport({
+				finding,
+				target,
+				validations: e.repos.validations.listByFinding(params.finding_id),
+				credentials: e.repos.credentials.listByTarget(finding.target_id),
+				trustworthy: true,
+			});
+			const rel = join(REPORTS_DIR, `finding-${params.finding_id}.md`);
+			await mkdir(join(ctx.cwd, REPORTS_DIR), { recursive: true });
+			await writeFile(join(ctx.cwd, rel), md, "utf8");
+			return {
+				content: [{ type: "text", text: `Report written to ${rel} from the Gate-1 record for finding #${params.finding_id}. Gate 2 (human approval) is still required before any submission.` }],
+				details: { path: rel, findingId: params.finding_id },
+			};
+		},
+	});
+
 	pi.registerCommand("status", { description: "Pluto: engagement overview", handler: (_a, ctx) => showStatus(ctx) });
 	pi.registerCommand("findings", { description: "Pluto: findings + drill-down actions", handler: (a, ctx) => showFindings(ctx, a) });
 	pi.registerCommand("nodes", { description: "Pluto: the investigation tree", handler: (_a, ctx) => showNodes(ctx) });

@@ -159,6 +159,7 @@ export function buildPlan(argv: string[]): ParseResult {
 		`Everything you do is logged. The operator can halt you at any instant (kill switch).${tunnelNote}${bbNote}`,
 		"Adapt to the target: the instant you identify the engagement class and your current tools do not fit it, call provision_capability(domain) to install that domain's toolset and load its doctrine BEFORE diving in (a raw/networked binary => 'binary-exploitation'; a cipher/RSA challenge => 'cryptography'; a pcap/dump => 'forensics'). Use list_capabilities if unsure. Do not hand-derive what a tool measures — provision the tool and measure it.",
 		`Work the engagement: recon, grow the investigation tree, validate findings through Gate 1, recover access, and report — consulting the knowledge base and runtime skills as you go. Record any credentials you recover with the record_credential tool.${objective ? ` Operator objective: ${objective}` : ""}`,
+		"The ledger is the truth, not your memory: use list_findings to see what is actually validated, and generate_report to produce a report — it is built ONLY from recorded Gate-1 facts and refuses anything unvalidated. NEVER hand-write a 'results'/'complete' file yourself; a free-text file you author is not an authoritative report and claiming completion you cannot show in the ledger is a serious integrity failure.",
 	].join("\n");
 
 	// Env: the per-engagement dynamics (the harness stack itself comes from .pi/settings.json).
