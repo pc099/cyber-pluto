@@ -9,7 +9,7 @@
  *   /findings  findings + drill-down/actions  /scope     in-scope hosts
  *   /nodes     the investigation tree         /kill      engage the kill switch
  *   /attempts  recent tool audit              /approve   Gate 2: human-approve a finding
- *   /report    write a finding report         /resume    clear an environmental pause
+ *   /report    write a finding report         /unpause   clear an environmental pause
  *   /pluto     the menu
  *
  * Gate 2 is enforced by construction: /approve is an OPERATOR command (the LLM
@@ -35,7 +35,11 @@ import { buildFindingReport } from "./report.js";
 
 const REPORTS_DIR = "reports";
 const KILL_FILE = "state/KILL_SWITCH";
-const PAUSE_FILE = "state/PAUSED";
+// The pause flag is per-engagement (lifecycle writes it to the state dir); the
+// kill switch stays global at repo-root state/.
+function pausePath(cwd: string): string {
+	return join(stateDir(cwd), "PAUSED");
+}
 const STATUS_ICON: Record<string, string> = { candidate: "?", validated: "✓", submitted: "→", rejected: "✗" };
 
 function eng(): Engagement | undefined {
@@ -254,7 +258,7 @@ async function showScope(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 async function doResume(ctx: ExtensionCommandContext): Promise<void> {
-	const p = join(ctx.cwd, PAUSE_FILE);
+	const p = pausePath(ctx.cwd);
 	if (!existsSync(p)) return void ctx.ui.notify("Engagement is not paused.", "info");
 	await rm(p, { force: true });
 	ctx.ui.notify("Resumed — the environmental pause has been cleared.", "info");
@@ -441,7 +445,10 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 	pi.registerCommand("creds", { description: "Pluto: recovered credentials", handler: (_a, ctx) => showCreds(ctx) });
 	pi.registerCommand("scope", { description: "Pluto: in-scope hosts", handler: (_a, ctx) => showScope(ctx) });
 	pi.registerCommand("kill", { description: "Pluto: engage the kill switch", handler: (_a, ctx) => doKill(ctx) });
-	pi.registerCommand("resume", { description: "Pluto: clear an environmental pause and continue", handler: (_a, ctx) => doResume(ctx) });
+	// NOTE: named 'unpause', NOT 'resume' — Pi has a built-in /resume that would
+	// shadow ours (skipping it in autocomplete), which once left an operator
+	// unable to clear an environmental pause. Keep this name distinct.
+	pi.registerCommand("unpause", { description: "Pluto: clear an environmental pause and continue", handler: (_a, ctx) => doResume(ctx) });
 	pi.registerCommand("approve", { description: "Pluto: Gate 2 — human-approve a finding", handler: (a, ctx) => approveMenu(ctx, a) });
 	pi.registerCommand("report", { description: "Pluto: write a finding report", handler: (a, ctx) => reportMenu(ctx, a) });
 
@@ -454,7 +461,7 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 		{ label: "/scope    — in-scope hosts", run: showScope },
 		{ label: "/approve  — Gate 2: human-approve a finding", run: (ctx) => approveMenu(ctx, "") },
 		{ label: "/report   — write a finding report", run: (ctx) => reportMenu(ctx, "") },
-		{ label: "/resume   — clear an environmental pause", run: doResume },
+		{ label: "/unpause  — clear an environmental pause", run: doResume },
 		{ label: "/kill     — engage the kill switch", run: doKill },
 	];
 	pi.registerCommand("pluto", {

@@ -17,7 +17,7 @@
  *     Chaitanya. A bypass/evasion mutation is a DIFFERENT call, so it reads as
  *     progress, not repetition (§6.5.2).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -68,7 +68,12 @@ function config() {
 	};
 }
 
-const PAUSE_FILE = "state/PAUSED";
+// The environmental-pause flag lives in the PER-ENGAGEMENT state dir (like
+// lifecycle-status.json), NOT repo-root, so a stale pause from a previous
+// engagement can never block a new one. (The kill switch stays global.)
+function pausePath(cwd: string): string {
+	return join(stateDir(cwd), "PAUSED");
+}
 
 // In-process lifecycle state for THIS run (reset each process).
 const state = {
@@ -131,6 +136,14 @@ function commandText(event: ToolCallEvent): string {
 export default function lifecycleExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_e: SessionStartEvent, ctx: ExtensionContext) => {
 		startEngagement(ctx.cwd);
+		// A brand-new session means the operator is present and starting fresh —
+		// never inherit a PAUSED flag from a prior run. (This once deadlocked the
+		// harness: a stale pause blocked every tool call with no way to resume.)
+		try {
+			rmSync(pausePath(ctx.cwd), { force: true });
+		} catch {
+			/* best effort */
+		}
 	});
 
 	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
@@ -170,10 +183,10 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		// 2. Environmental pause — target is the problem; flag for review.
 		// File-based (like the kill switch) so it survives across extension
 		// realms and the operator can clear it with /resume.
-		if (existsSync(join(ctx.cwd, PAUSE_FILE))) {
+		if (existsSync(pausePath(ctx.cwd))) {
 			let reason = "target-health signal";
 			try {
-				reason = readFileSync(join(ctx.cwd, PAUSE_FILE), "utf8").trim() || reason;
+				reason = readFileSync(pausePath(ctx.cwd), "utf8").trim() || reason;
 			} catch {
 				// keep default
 			}
@@ -188,7 +201,7 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 			}
 			return {
 				block: true,
-				reason: `Engagement PAUSED — ${reason} (§10.5). Flagged for review; not burning budget against an untestable target. The operator can resume with /resume.`,
+				reason: `Engagement PAUSED — ${reason} (§10.5). Flagged for review; not burning budget against an untestable target. The operator can resume with /unpause. (This is an operator-only console command; you, the agent, cannot clear it — stop and wait rather than retrying tools.)`,
 			};
 		}
 
@@ -227,7 +240,7 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		// target being unhealthy.
 		if (event.toolName !== "bash" && event.toolName !== "powershell") return;
 		if (event.isError) return;
-		if (existsSync(join(ctx.cwd, PAUSE_FILE))) return;
+		if (existsSync(pausePath(ctx.cwd))) return;
 
 		const signal = detectUnhealthy(extractText(event.result));
 		if (!signal) {
@@ -239,13 +252,13 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 			const reason = `target-health signal '${signal}' on ${state.unhealthyHits} consecutive responses`;
 			try {
 				await mkdir(join(ctx.cwd, "state"), { recursive: true });
-				await writeFile(join(ctx.cwd, PAUSE_FILE), reason, "utf8");
+				await writeFile(pausePath(ctx.cwd), reason, "utf8");
 			} catch (err) {
 				console.error("[pluto/lifecycle] failed to write pause file:", err);
 			}
 			state.unhealthyHits = 0;
 			await logEvent(ctx.cwd, { kind: "environmental_pause", signal, reason });
-			console.error(`[pluto/lifecycle] ENGAGEMENT PAUSED — ${reason}. Operator: /resume to continue.`);
+			console.error(`[pluto/lifecycle] ENGAGEMENT PAUSED — ${reason}. Operator: /unpause to continue.`);
 		}
 	});
 }
