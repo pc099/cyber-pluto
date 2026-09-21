@@ -71,6 +71,21 @@ test("blocks each prohibited category (block path)", () => {
 	}
 });
 
+test("an SSH credential brute against ONE in-scope host is allowed; a host-by-host ssh loop is self-propagation", () => {
+	// Regression: `for cred in …; do ssh user@10.0.0.5` (a single-target password
+	// spray) was falsely blocked as self-propagation, forcing the agent off a
+	// legitimate brute. Propagation is looping over HOSTS (loop var = ssh target).
+	assert.deepEqual(
+		checkRedLines(bash("for cred in a b c; do sshpass -p $cred ssh nathan@10.0.0.5 id; done"), ctx),
+		{ allowed: true },
+	);
+	// Both hosts in-scope, so this isn't a scope violation — it's host-by-host
+	// spread (loop var is the ssh target), which self-propagation must still block.
+	const spread = checkRedLines(bash("for h in 10.0.0.5 localhost; do ssh $h hostname; done"), ctx);
+	assert.equal(spread.allowed, false, "looping ssh over multiple hosts must trip self-propagation");
+	if (!spread.allowed) assert.equal(spread.category, "self_propagation");
+});
+
 test("a DELETE with a WHERE clause is not blocked as destructive", () => {
 	// The reasoning core reading one row is fine; only unbounded deletes are red-lined.
 	const decision = checkRedLines(bash("mysql -e 'DELETE FROM sessions WHERE id=1'"), ctx);

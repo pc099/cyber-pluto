@@ -211,7 +211,13 @@ const SELF_PROPAGATION_RULE = patternRule({
 	description: "Unattended spread beyond the aimed host without human re-approval per hop.",
 	reason: "Unattended self-propagation: would spread tooling/payload beyond the target host",
 	patterns: [
-		/for\s+\w+\s+in\s+.*;\s*do\s+.*\bssh\b.*done/is,
+		// Propagation = looping over HOSTS and ssh-ing EACH (the loop variable is
+		// the ssh TARGET). A single-target credential brute (`for cred in …; do
+		// ssh user@FIXEDHOST …`) is NOT propagation — it stays within the aimed,
+		// in-scope host and is left to scope enforcement + the two gates. Requiring
+		// the loop var to appear as the ssh host removes that false positive while
+		// still catching real host-by-host spread.
+		/for\s+(\w+)\s+in\s+.*?;\s*do\s+.*?\bssh\b.*?(?:@|\s)\$\{?\1\b.*?done/is,
 		/\bfor\b.*\bin\b.*\$\(.*(shodan|masscan|nmap).*\).*\bdo\b/is,
 		/\b(psexec|wmiexec|crackmapexec|cme)\b[^\n]*@?\S+\/\d{1,2}\b/i, // subnet spray
 		/\bansible\b[^\n]*-i\s+\S+,?\S*/i,

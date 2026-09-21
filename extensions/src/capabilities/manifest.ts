@@ -56,12 +56,13 @@ export const CAPABILITIES: readonly Capability[] = [
 	},
 	{
 		domain: "web",
-		description: "Web application testing — already the core toolset (nmap, curl, chromium, the Gate 1 validators).",
+		description:
+			"Web application testing — core toolset (nmap, curl, chromium, the Gate 1 validators) PLUS content discovery + fingerprinting: ffuf/gobuster (dir/vhost brute, wordlists at /usr/share/dirb/wordlists/ and /usr/share/wordlists/dirb/), whatweb (tech fingerprint), dirb. Prefer these over hand-rolled curl loops for enumeration.",
 		detect: ["http", "https", "web app", "url", "api endpoint", "vhost"],
 		skill: undefined,
-		apt: [],
+		apt: ["ffuf", "gobuster", "whatweb", "dirb"],
 		pip: [],
-		verify: `command -v curl && command -v nmap`,
+		verify: `command -v curl && command -v nmap && command -v ffuf && command -v gobuster`,
 	},
 ];
 
