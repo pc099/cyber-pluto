@@ -101,6 +101,7 @@ export function buildPlan(argv: string[]): ParseResult {
 		};
 		try {
 			switch (a) {
+				case "--target": case "--host": target = next(); break;
 				case "--scope": scope = next(); break;
 				case "--scope-file": scopeFile = next(); break;
 				case "--provider": provider = next(); break;
@@ -128,6 +129,23 @@ export function buildPlan(argv: string[]): ParseResult {
 			return { kind: "error", message: err instanceof Error ? err.message : String(err) };
 		}
 	}
+
+	// Catch the common mis-invocation `pluto init-engagement …`: Cyber Pluto has
+	// NO subcommands — the target is the first argument (or --target). A
+	// subcommand-style first word would otherwise become a bogus target and
+	// red-line every real access.
+	const SUBCOMMAND_MISTAKES = new Set([
+		"init-engagement", "init", "engage", "engagement", "start", "run", "scan", "new", "create", "begin",
+	]);
+	if (target && SUBCOMMAND_MISTAKES.has(target.toLowerCase())) {
+		return {
+			kind: "error",
+			message: `'${target}' is not a target host — Cyber Pluto has no subcommands. Pass the target as the first argument (or with --target):\n    pluto <target-ip-or-host> "<objective>"\n  e.g.  pluto 192.168.122.68 "find and exploit web vulns, escalate to root, capture the flags"`,
+		};
+	}
+	// Junk scope tokens some operators reach for ("full"/"all") aren't hosts; drop
+	// them so they don't pollute the scope set (the target itself is in scope).
+	if (scope) scope = normalizeScope(scope).filter((s) => !["full", "all", "any", "*"].includes(s.toLowerCase())).join(",");
 
 	const scopeHosts: string[] = [];
 	if (target) scopeHosts.push(target);
@@ -225,7 +243,11 @@ const BANNER = `
            two gates · red-lines · no PoC, no finding
 `;
 
-const HELP = `Usage: cyberpluto [TARGET] [OBJECTIVE...] [options]
+const HELP = `Usage: cyberpluto <TARGET> [OBJECTIVE...] [options]
+
+  TARGET is the first argument — an IP or hostname. There are NO subcommands.
+    e.g.  pluto 192.168.122.68 "find and exploit web vulns, escalate to root"
+
 
   The harness stack is defined in .pi/settings.json (loaded by Pi, trusted with -a).
   This launcher only starts an ENGAGEMENT against a target.
