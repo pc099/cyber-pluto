@@ -154,6 +154,15 @@
 - (none)
 
 ## Resume-here note (write before stopping, or when nearing a usage limit)
+- **FIRST LIVE RUN reviewed + remediated (Decisions 0004/0005).** The Matrix-Breakout run got a real file-write→RCE foothold but: found it by reading the target's local VMDK (not black-box recon), Gate 1 false-negatived the proven RCE (self-poisoned baseline + no validator for the class), left a live backdoor, and burned the 4M token cap (provision_capability never fired). Board reviewed (0004) + approved a remediation plan with conditions (0005). **Built increments 1-4, all committed, 107/107:**
+  - **Inc 1 (`09c29eb`)** — `validate_file_write_rce` validator: serializable declarative write template, baseline-BEFORE-plant (kills self-poison), inert self-deleting arithmetic exec proof (NO `$_GET` backdoor), CSPRNG names, cleanup DECOUPLED from verdict (cleanup-fail → blocking pause, never a false-negative), write-only → lesser `arbitrary_file_write`.
+  - **Inc 2 (`dcd20c6`)** — `local_target_artifact_access` red-line: blocks offline disk-image/backing-store access (virt-*/guestmount/qemu-nbd + `.vmdk/.qcow2/.ova` + `/var/lib/libvirt/images`, `*/vulnhub/*`), class-gated (forensics exempt via `PLUTO_ENGAGEMENT_CLASS`), not over-blocking generic `.img`.
+  - **Inc 3 (`42ce586`)** — structural launch-time provisioning: `--domain` (default web) → launcher runs the domain's manifest `verify` + installs whitelisted pkgs before handoff; sets `PLUTO_ENGAGEMENT_CLASS`.
+  - **Inc 4 (`4c724a7`)** — `/summary` honest run-summary (foothold/creds visible at 0 validated). Phase-budgeted caps DEFERRED.
+- **STILL OWED (both need a LIVE run, blocked on the operator's provider — they're on OpenAI, out of Anthropic credits):**
+  1. **HARD GATE (griller's die-on):** demonstrate black-box recon finds a vuln OVER THE NETWORK (this run only found it via the local disk image). Not yet proven.
+  2. **Backfill:** live re-run `validate_file_write_rce` against the box (fresh nonces, through `promote`, cleanup) to turn this run's RCE into a real `validated` row. Do NOT hand-write the row.
+
 - **LATEST — this session's arc:** Item 0 (Gate-1 direct-flip forge) CLOSED in 6 increments (`f0cf4c6`→`3e67f15`), then Item-0 consumer enforcement completed in the cockpit (`7e4bdff`), the **ungated free-text report bug FIXED** (`5ca5b6c`: `generate_report`/`list_findings` DB-grounded tools + system-prompt guidance), and the **Item-0 follow-on board huddle RATIFIED** (Decision 0002, all four members) with its **first increment shipped** — the red-team forge SENTINEL test (`extensions/src/state/gate1-forge-residual.test.ts`). 81/81 tests.
 - **The SENTINEL is now the watched fact:** it asserts the residual is currently OPEN (a forged `passed` validations row reaches a signed, submittable `validated`) and guards that the Item-0 direct flip stays closed. **When the SENTINEL's scenario-2 assertions start FAILING, the forge has been closed for that class — flip them to expect refusal, and only THEN may Gate 1 be called tamper-PROOF** (QA's hard NO-GO until then).
 - **Next, in the ratified order (Decision 0002 §2):**
