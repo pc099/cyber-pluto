@@ -23,7 +23,8 @@ export type RedLineCategory =
 	| "false_flag_or_evidence_tampering"
 	| "safety_of_life_systems"
 	| "destructive_or_irreversible"
-	| "sensitive_data_exfiltration";
+	| "sensitive_data_exfiltration"
+	| "local_target_artifact_access";
 
 /** A proposed tool invocation, normalized for inspection. */
 export interface ToolInvocation {
@@ -224,6 +225,43 @@ const SELF_PROPAGATION_RULE = patternRule({
 	],
 });
 
+/**
+ * Local-target-artifact access (Decision 0005, Increment 2). The first live run
+ * "found" the vuln not by network recon but by mounting the target's VMDK disk
+ * image sitting on the attacker host and reading the source — the answer key.
+ * In a black-box/network engagement, target knowledge must come over the
+ * NETWORK; inspecting the target's disk image or backing store offline is out of
+ * scope. Custom (not patternRule) because it is ENGAGEMENT-CLASS-GATED: forensics
+ * engagements legitimately mount operator-provided images.
+ *
+ * Keyed on the ASSET (VM disk-image formats + offline-disk toolset + known
+ * backing-store paths), not just tool names (a tool denylist leaks). Generic
+ * `.img`/`.raw` are deliberately NOT matched — they are too ambiguous (firmware,
+ * payloads) and would over-block; the target's real images are .vmdk/.qcow2/.ova.
+ */
+const LOCAL_TARGET_ARTIFACT_RULE: RedLineRule = {
+	id: "local-target-artifact-access",
+	category: "local_target_artifact_access",
+	description: "Inspecting the live target's disk image / backing store offline instead of over the network (cheating black-box recon).",
+	evaluate(inv) {
+		if ((process.env["PLUTO_ENGAGEMENT_CLASS"] ?? "").toLowerCase() === "forensics") return null; // forensics legitimately mounts images
+		const patterns = [
+			// offline-disk inspection/mount toolset (defense in depth)
+			/\b(virt-ls|virt-filesystems|virt-cat|virt-copy-out|virt-inspector|virt-tar-out|guestmount|guestfish|qemu-nbd|kpartx)\b/i,
+			// a VM disk-image asset referenced by ANY command (mount/cat/strings/dd/qemu-img/binwalk on it)
+			/\.(vmdk|qcow2|vhdx?|vdi|ova)\b/i,
+			// the target's backing store on the attacker host
+			/(\/var\/lib\/libvirt\/images\/|\/vulnhub\/)/i,
+		];
+		for (const p of patterns) {
+			if (p.test(inv.commandText)) {
+				return `Target knowledge must come from the NETWORK plane — inspecting the target's disk image/backing store offline is out of scope for a black-box/network engagement (matched /${p.source}/). Use network recon (nmap/ffuf/curl) instead.`;
+			}
+		}
+		return null;
+	},
+};
+
 const FALSE_FLAG_RULE = patternRule({
 	id: "false-flag-or-tampering",
 	category: "false_flag_or_evidence_tampering",
@@ -323,6 +361,7 @@ const OUT_OF_SCOPE_RULE: RedLineRule = {
 export const RED_LINE_RULES: readonly RedLineRule[] = [
 	SAFETY_OF_LIFE_RULE, // highest priority — blocks regardless of scope
 	OUT_OF_SCOPE_RULE,
+	LOCAL_TARGET_ARTIFACT_RULE,
 	DOS_RULE,
 	SELF_PROPAGATION_RULE,
 	FALSE_FLAG_RULE,

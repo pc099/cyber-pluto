@@ -86,6 +86,37 @@ test("an SSH credential brute against ONE in-scope host is allowed; a host-by-ho
 	if (!spread.allowed) assert.equal(spread.category, "self_propagation");
 });
 
+test("reading the target's disk image offline is blocked (cheating black-box recon), but network recon is allowed", () => {
+	// Blocked: offline inspection of the target's backing store / disk image.
+	for (const cmd of [
+		"virt-ls -a /root/vulnhub/matrix-breakout-2-morpheus-disk1.vmdk /var/www/html",
+		"mount -o loop,ro /var/lib/libvirt/images/matrix-breakout.qcow2 /mnt",
+		"guestmount -a disk.img -i --ro /mnt", // alternative tool, even on a .img
+		"qemu-nbd --connect=/dev/nbd0 target.qcow2",
+		"cat ../images/MORPHEUS.VMDK", // uppercase + relative-path evasion
+	]) {
+		const d = checkRedLines(bash(cmd), ctx);
+		assert.equal(d.allowed, false, `should block offline disk access: ${cmd}`);
+		if (!d.allowed) assert.equal(d.category, "local_target_artifact_access");
+	}
+	// Allowed: network recon, and a benign non-target .img (not over-blocked).
+	assert.deepEqual(checkRedLines(bash("nmap -sV 10.0.0.5"), ctx), { allowed: true });
+	assert.deepEqual(checkRedLines(bash("curl -s http://10.0.0.5/index.html"), ctx), { allowed: true });
+	assert.deepEqual(checkRedLines(bash("curl -O http://10.0.0.5/firmware.img"), ctx), { allowed: true });
+	assert.deepEqual(checkRedLines(bash("dd if=/dev/zero of=payload.img bs=1M count=1"), ctx), { allowed: true });
+});
+
+test("the disk-image rule is exempt for forensics engagements", () => {
+	const saved = process.env["PLUTO_ENGAGEMENT_CLASS"];
+	process.env["PLUTO_ENGAGEMENT_CLASS"] = "forensics";
+	try {
+		assert.deepEqual(checkRedLines(bash("virt-ls -a evidence.qcow2 /"), ctx), { allowed: true });
+	} finally {
+		if (saved === undefined) delete process.env["PLUTO_ENGAGEMENT_CLASS"];
+		else process.env["PLUTO_ENGAGEMENT_CLASS"] = saved;
+	}
+});
+
 test("a DELETE with a WHERE clause is not blocked as destructive", () => {
 	// The reasoning core reading one row is fine; only unbounded deletes are red-lined.
 	const decision = checkRedLines(bash("mysql -e 'DELETE FROM sessions WHERE id=1'"), ctx);
