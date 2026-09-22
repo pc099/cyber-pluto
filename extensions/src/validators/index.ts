@@ -12,11 +12,15 @@
  * solely from the deterministic code, and candidate→validated is gated in
  * findings-repo, so no LLM output can fabricate a validated finding.
  */
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { stateDir } from "../state/db.js";
 import { type Engagement, getEngagement, startEngagement } from "../state/engagement.js";
 import { type FindingRow } from "../state/types.js";
 import { validateCommandInjection } from "./command-injection.js";
+import { validateFileWriteRce } from "./file-write-rce.js";
 import { type GateReport, recordAndGate } from "./gate.js";
 import { validateIdor } from "./idor.js";
 import { validatePathTraversal } from "./path-traversal.js";
@@ -164,6 +168,48 @@ export default function validatorsExtension(pi: ExtensionAPI): void {
 			if (isResult(loaded)) return loaded;
 			const headers = params.cookie ? { Cookie: params.cookie } : undefined;
 			const report = await validateIdor({ ownUrl: params.own_url, otherUrl: params.other_url, headers });
+			return recordAndGate(ctx.cwd, loaded.engagement, params.finding_id, report);
+		},
+	});
+
+	pi.registerTool({
+		name: "validate_file_write_rce",
+		label: "Validate File-Write → RCE (Gate 1)",
+		description:
+			"Deterministic Gate 1 validator for arbitrary-file-write / file-upload → RCE. You give the write primitive DECLARATIVELY (the write URL, the field carrying the filename, the field carrying the content, and where written files surface). The validator captures a clean baseline FIRST, writes a canary and confirms it is served, then proves code execution with an INERT self-deleting arithmetic file (7*7→49) — it does NOT plant a command shell. It cleans up its artifacts and you do not decide the verdict. Exec proven → file_write_rce; write-only → the lesser arbitrary_file_write.",
+		parameters: Type.Object({
+			finding_id: Type.Number({ description: "Candidate finding id from record_candidate" }),
+			write_url: Type.String({ description: "URL that performs the file write (the vulnerable endpoint)" }),
+			file_field: Type.String({ description: "Form field carrying the target filename, e.g. 'filename'" }),
+			content_field: Type.String({ description: "Form field carrying the file content, e.g. 'content'" }),
+			fetch_url_template: Type.String({ description: "Where written files surface; use {name} for the filename, e.g. 'http://10.0.0.5:81/{name}'" }),
+			content_type: Type.Optional(Type.String({ description: "'form' (default) or 'multipart'" })),
+			cookie: Type.Optional(Type.String({ description: "Session cookie if the write/fetch needs auth" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+			const loaded = loadFinding(params.finding_id);
+			if (isResult(loaded)) return loaded;
+			const report = await validateFileWriteRce({
+				writeUrl: params.write_url,
+				fileField: params.file_field,
+				contentField: params.content_field,
+				fetchUrlTemplate: params.fetch_url_template,
+				contentType: params.content_type === "multipart" ? "multipart" : "form",
+				cookie: params.cookie,
+			});
+			// †C5: a cleanup we could not confirm is a do-no-harm problem, NOT a
+			// verdict problem — raise a BLOCKING pause (same file-based mechanism the
+			// lifecycle honors) so the operator removes the artifact, then /unpause.
+			if (report.cleanupFailed) {
+				try {
+					writeFileSync(
+						join(stateDir(ctx.cwd), "PAUSED"),
+						`file_write_rce left an artifact that could not be auto-removed: ${report.artifactRefs?.join(", ")}. Remove the backing file(s), then /unpause.`,
+					);
+				} catch {
+					/* the alert is also in the tool result + evidence below */
+				}
+			}
 			return recordAndGate(ctx.cwd, loaded.engagement, params.finding_id, report);
 		},
 	});

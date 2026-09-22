@@ -38,6 +38,15 @@ export interface ValidationReport {
 	baseline: CapturedExchange | null;
 	attacks: CapturedExchange[];
 	steps: VerifiableStep[];
+	/**
+	 * DECOUPLED from `passed` (Decision 0005 †C5): set when a validator planted an
+	 * artifact it could not confirm removed. The verdict still reflects
+	 * reproduction; this flags a do-no-harm problem the operator must resolve.
+	 * The tool layer turns this into a BLOCKING pause + logs `artifactRefs`.
+	 */
+	cleanupFailed?: boolean;
+	/** Where any un-removed artifact is reachable, so the operator can delete it. */
+	artifactRefs?: string[];
 }
 
 /** A per-validation nonce so a reflected/echoed marker can't be coincidence. */
