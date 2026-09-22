@@ -108,6 +108,34 @@ async function showStatus(ctx: ExtensionCommandContext): Promise<void> {
 	refreshWidget(ctx);
 }
 
+async function showSummary(ctx: ExtensionCommandContext): Promise<void> {
+	const e = eng();
+	if (!e) return void ctx.ui.notify("No engagement open.", "warning");
+	const t = e.repos.targets.getById(e.targetId);
+	const c = e.repos.findings.countByStatus(e.targetId);
+	const untrusted = e.repos.findings.listUntrustedValidated(e.targetId).length;
+	const creds = e.repos.credentials.listByTarget(e.targetId);
+	// The honest picture (Decision 0005 Increment 4): a real foothold — recovered
+	// credentials, candidate findings — must be visible even when 0 are validated,
+	// so a genuine compromise is never hidden behind a headline "0 validated".
+	const footholdSignals: string[] = [];
+	if (creds.length) footholdSignals.push(`${creds.length} credential(s) recovered`);
+	if (c.validated > untrusted) footholdSignals.push(`${c.validated - untrusted} validated finding(s)`);
+	if (c.candidate) footholdSignals.push(`${c.candidate} candidate(s) awaiting Gate 1`);
+	const lines = [
+		`target     ${t?.host ?? t?.label} (${t?.phase ?? "recon"})`,
+		`findings   ✓${c.validated} validated · ?${c.candidate} candidate · →${c.submitted} submitted · ✗${c.rejected} rejected`,
+		...(untrusted > 0 ? [`⚠ ${untrusted} 'validated' finding(s) FAIL Gate-1 signature (untrusted — possible tampering)`] : []),
+		`creds      ${creds.length} recovered${creds.length ? `: ${creds.map((r) => r.username ?? "?").join(", ")}` : ""}`,
+		`tree       ${e.repos.nodes.countByTarget(e.targetId)} nodes · ${e.repos.attempts.countByTarget(e.targetId)} attempts`,
+		"────────────────────────────────────────────",
+		footholdSignals.length
+			? `FOOTHOLD/PROGRESS: ${footholdSignals.join(" · ")}${c.validated === 0 && creds.length ? "  (note: real progress exists despite 0 validated — validate the vuln class to count it)" : ""}`
+			: "No foothold or findings yet — still enumerating.",
+	];
+	await ctx.ui.select("Engagement summary", lines);
+}
+
 async function doReport(ctx: ExtensionCommandContext, e: Engagement, findingId: number): Promise<void> {
 	const finding = e.repos.findings.getById(findingId);
 	if (!finding) return void ctx.ui.notify(`No finding #${findingId}.`, "warning");
@@ -439,6 +467,7 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("status", { description: "Pluto: engagement overview", handler: (_a, ctx) => showStatus(ctx) });
+	pi.registerCommand("summary", { description: "Pluto: honest engagement summary (foothold/creds even at 0 validated)", handler: (_a, ctx) => showSummary(ctx) });
 	pi.registerCommand("findings", { description: "Pluto: findings + drill-down actions", handler: (a, ctx) => showFindings(ctx, a) });
 	pi.registerCommand("nodes", { description: "Pluto: the investigation tree", handler: (_a, ctx) => showNodes(ctx) });
 	pi.registerCommand("attempts", { description: "Pluto: recent tool audit", handler: (_a, ctx) => showAttempts(ctx) });
@@ -454,6 +483,7 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 
 	const MENU: Array<{ label: string; run: (ctx: ExtensionCommandContext) => Promise<void> }> = [
 		{ label: "/status   — engagement overview", run: showStatus },
+		{ label: "/summary  — honest run summary (foothold/creds even at 0 validated)", run: showSummary },
 		{ label: "/findings — findings + drill-down actions", run: (ctx) => showFindings(ctx, "") },
 		{ label: "/nodes    — investigation tree", run: showNodes },
 		{ label: "/attempts — recent tool audit", run: showAttempts },
