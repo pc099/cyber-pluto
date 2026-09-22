@@ -24,6 +24,21 @@ test("target becomes scope and drives env + briefing", () => {
 	assert.ok(p.briefing.includes("Operator objective: find a foothold"));
 });
 
+test("engagement class: defaults to web, --domain overrides, and sets PLUTO_ENGAGEMENT_CLASS", () => {
+	const web = plan(["10.0.0.5"]);
+	assert.equal(web.domain, "web");
+	assert.equal(web.env.PLUTO_ENGAGEMENT_CLASS, "web");
+	const forensics = plan(["10.0.0.5", "--domain", "forensics"]);
+	assert.equal(forensics.domain, "forensics");
+	assert.equal(forensics.env.PLUTO_ENGAGEMENT_CLASS, "forensics");
+});
+
+test("the briefing still directs the core to provision its toolset (guard against silent removal)", () => {
+	// Increment 3 is structural (the launcher provisions), but the doctrine line
+	// must survive so a class the launcher didn't pre-provision still gets tools.
+	assert.ok(plan(["10.0.0.5"]).briefing.includes("provision_capability"));
+});
+
 test("the launcher passes -a and NEVER assembles the stack with -e flags", () => {
 	const p = plan(["10.0.0.5"]);
 	assert.ok(p.cliArgs.includes("-a"), "must trust the .pi/ profile");

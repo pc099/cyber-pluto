@@ -16,7 +16,38 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { findCapability } from "../capabilities/manifest.js";
+
 const PI_CLI = "pi/pi/packages/coding-agent/dist/bundle/cli.js";
+
+/** Launch-time STRUCTURAL provisioning (Decision 0005, Increment 3). The first
+ * run never called provision_capability despite the briefing, hand-rolled curl,
+ * and burned the token cap. So the launcher itself verifies the declared
+ * engagement domain's toolset is present and installs the manifest-whitelisted
+ * packages (root only) BEFORE handoff — a briefing nudge is the lever that
+ * already failed. Verify-first: if the tools are baked/installed, nothing runs. */
+function provisionDomain(root: string, domain: string): void {
+	const cap = findCapability(domain);
+	if (!cap) {
+		process.stderr.write(`  provisioning: unknown domain '${domain}' — skipping (see list_capabilities).\n`);
+		return;
+	}
+	const verifyOk = (): boolean => spawnSync("bash", ["-c", cap.verify], { cwd: root, stdio: "ignore" }).status === 0;
+	if (verifyOk()) {
+		process.stdout.write(`  provisioning  '${domain}' toolset present ✓\n`);
+		return;
+	}
+	if (process.getuid?.() !== 0) {
+		process.stderr.write(
+			`  provisioning: '${domain}' toolset MISSING and not root — install manually: apt-get install -y ${cap.apt.join(" ")}${cap.pip.length ? ` && pip install ${cap.pip.join(" ")}` : ""}\n`,
+		);
+		return;
+	}
+	process.stdout.write(`  provisioning  installing '${domain}' toolset: ${[...cap.apt, ...cap.pip].join(", ")}\n`);
+	if (cap.apt.length) spawnSync("apt-get", ["install", "-y", ...cap.apt], { cwd: root, stdio: "inherit", env: { ...process.env, DEBIAN_FRONTEND: "noninteractive" } });
+	if (cap.pip.length) spawnSync("pip", ["install", "--break-system-packages", ...cap.pip], { cwd: root, stdio: "inherit" });
+	process.stdout.write(verifyOk() ? `  provisioning  '${domain}' verified ✓\n` : `  provisioning: '${domain}' still fails verify — continuing; the agent may lack tools.\n`);
+}
 // Gate-1 privileged promotion signer (Item 0). The private key lives OUTSIDE the
 // pluto-readable harness tree (setup.sh installs it root-only); the daemon holds
 // it and the confined agent reaches it only through the socket + client.
@@ -56,6 +87,9 @@ export interface LaunchPlan {
 	headless: boolean;
 	sandbox: boolean;
 	dryRun: boolean;
+	/** Operator-declared engagement class (default "web"). Drives launch-time
+	 * provisioning and PLUTO_ENGAGEMENT_CLASS (e.g. the forensics red-line exemption). */
+	domain: string;
 	env: Record<string, string>;
 	cliArgs: string[];
 	briefing: string;
@@ -86,6 +120,7 @@ export function buildPlan(argv: string[]): ParseResult {
 	let dryRun = false;
 	let headless = false;
 	let sandbox = false;
+	let domain = "web";
 	let program: string | undefined;
 	let trafficId: string | undefined;
 	let rate: string | undefined;
@@ -119,6 +154,7 @@ export function buildPlan(argv: string[]): ParseResult {
 				case "--rate": rate = next(); break;
 				case "--headless": case "--auto": headless = true; break;
 				case "--sandbox": sandbox = true; break;
+				case "--domain": domain = next(); break;
 				case "--dry-run": dryRun = true; break;
 				case "-h": case "--help": return { kind: "help" };
 				default:
@@ -189,6 +225,7 @@ export function buildPlan(argv: string[]): ParseResult {
 		PLUTO_MAX_WALLCLOCK_S: String(maxWall),
 		PLUTO_MAX_TOKENS: String(maxTokens),
 		PLUTO_SUBAGENT_PROVIDER: provider ?? "anthropic",
+		PLUTO_ENGAGEMENT_CLASS: domain,
 		// Per-target state-DB isolation: each target gets its own pluto.db, so
 		// targets never share one ledger (which accumulated stale-target rows).
 		// Control files, logs, and evidence stay at the repo root — run one
@@ -226,7 +263,7 @@ export function buildPlan(argv: string[]): ParseResult {
 		kind: "plan",
 		plan: {
 			target, scopeHosts, scopeCsv, label, provider, model, attackProvider, attackModel,
-			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, sandbox, dryRun,
+			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, sandbox, dryRun, domain,
 			env, cliArgs, briefing,
 		},
 	};
@@ -268,6 +305,8 @@ Options:
   --tunnel             Brief Pluto to use TCP-connect scans
   --program / --traffic-id / --rate   Bug-bounty compliance
   --headless           Run autonomously (no interactive shell)
+  --domain NAME        Engagement class for launch provisioning (default web;
+                       e.g. forensics, binary-exploitation, cryptography)
   --sandbox            Confine the agent: unprivileged 'pluto' uid, read-only
                        harness tree, nftables egress allowlist from scope (root;
                        run sandbox/setup.sh once first)
@@ -320,6 +359,9 @@ async function main(): Promise<void> {
 	}
 
 	const childEnv = { ...process.env, ...plan.env };
+
+	// Structural, class-driven provisioning BEFORE handoff (Increment 3).
+	provisionDomain(root, plan.domain);
 
 	if (plan.sandbox) {
 		if (process.getuid?.() !== 0) {
