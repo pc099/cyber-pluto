@@ -224,7 +224,7 @@ export function buildPlan(argv: string[]): ParseResult {
 		PLUTO_MAX_TOOL_CALLS: String(maxCalls),
 		PLUTO_MAX_WALLCLOCK_S: String(maxWall),
 		PLUTO_MAX_TOKENS: String(maxTokens),
-		PLUTO_SUBAGENT_PROVIDER: provider ?? "anthropic",
+		PLUTO_SUBAGENT_PROVIDER: provider ?? "openai-codex",
 		PLUTO_ENGAGEMENT_CLASS: domain,
 		// Per-target state-DB isolation: each target gets its own pluto.db, so
 		// targets never share one ledger (which accumulated stale-target rows).
@@ -292,7 +292,7 @@ const HELP = `Usage: cyberpluto <TARGET> [OBJECTIVE...] [options]
 Options:
   --scope LIST         Comma/space in-scope hosts (adds to TARGET)
   --scope-file FILE    Read in-scope hosts from a file
-  --provider NAME      LLM provider (default from profile: anthropic)
+  --provider NAME      LLM provider (default from profile: openai-codex)
   --model NAME         Reasoning model (default from profile)
   --attack-provider P  Provider for the exploitation phase (phase routing)
   --attack-model NAME  Model for the exploitation phase
@@ -370,7 +370,7 @@ async function main(): Promise<void> {
 		}
 		// 1. Apply the authoritative egress allowlist from OPERATOR scope + the
 		//    provider host(s), BEFORE the agent starts. pluto can't change it.
-		const providerHosts = PROVIDER_HOSTS[plan.provider ?? "anthropic"] ?? [];
+		const providerHosts = PROVIDER_HOSTS[plan.provider ?? "openai-codex"] ?? [];
 		const attackHosts = plan.attackProvider ? (PROVIDER_HOSTS[plan.attackProvider] ?? []) : [];
 		// External-intel tool hosts (Shodan etc.): only allowed through egress when
 		// the tool's key is present, so an unused intel tool widens nothing.
@@ -380,12 +380,12 @@ async function main(): Promise<void> {
 		// 2. Inject the provider credential into the child env (never on disk,
 		//    never printed) — the confined `pluto` uid cannot read root's ~/.pi,
 		//    so root extracts the key here and passes it as the provider env var.
-		const keyEnv = PROVIDER_KEY_ENV[plan.provider ?? "anthropic"];
+		const keyEnv = PROVIDER_KEY_ENV[plan.provider ?? "openai-codex"];
 		if (keyEnv && !childEnv[keyEnv]) {
-			const k = spawnSync("node", [PI_CLI, "auth", "print-api-key", "--provider", plan.provider ?? "anthropic"], { cwd: root, encoding: "utf8" });
+			const k = spawnSync("node", [PI_CLI, "auth", "print-api-key", "--provider", plan.provider ?? "openai-codex"], { cwd: root, encoding: "utf8" });
 			const key = (k.stdout ?? "").trim();
 			if (k.status === 0 && key) childEnv[keyEnv] = key;
-			else process.stderr.write(`warning: could not extract a ${plan.provider ?? "anthropic"} key to inject; the sandboxed agent may fail to authenticate.\n`);
+			else process.stderr.write(`warning: could not extract a ${plan.provider ?? "openai-codex"} key to inject; the sandboxed agent may fail to authenticate.\n`);
 		}
 		// 3. Start the PRIVILEGED Gate-1 signing daemon as root, BEFORE dropping to
 		//    pluto. It holds the promotion private key (which lives outside the

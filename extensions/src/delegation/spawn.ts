@@ -84,8 +84,8 @@ export interface SubAgentTarget {
  * less-aligned model on the attack phase is still bounded by the §10.4 gate.
  */
 export function subAgentTarget(specialist: string): SubAgentTarget {
-	const mainProvider = process.env["PLUTO_SUBAGENT_PROVIDER"] ?? "anthropic";
-	const mainModel = process.env["PLUTO_SUBAGENT_MODEL"] ?? "claude-haiku-4-5";
+	const mainProvider = process.env["PLUTO_SUBAGENT_PROVIDER"] ?? "openai-codex";
+	const mainModel = process.env["PLUTO_SUBAGENT_MODEL"] ?? "gpt-5.5";
 	if (specialist === "exploitation") {
 		return {
 			provider: process.env["PLUTO_ATTACK_PROVIDER"] ?? mainProvider,
@@ -101,7 +101,7 @@ export function subAgentModel(): string {
 }
 
 export function buildSubAgentArgs(opts: { provider?: string; model: string; prompt: string; extensions: string[] }): string[] {
-	const args = [CLI_REL, "--provider", opts.provider ?? "anthropic", "--model", opts.model, "--no-session", "-p", opts.prompt];
+	const args = [CLI_REL, "--provider", opts.provider ?? "openai-codex", "--model", opts.model, "--no-session", "-p", opts.prompt];
 	for (const e of opts.extensions) {
 		args.push("-e", e);
 	}
