@@ -62,6 +62,13 @@ export interface FindingsRepo {
 	 */
 	create(input: CreateFindingInput): FindingRow;
 	getById(id: number): FindingRow | undefined;
+	/** The existing finding for a (target, port, protocol), if any — so recon can
+	 * DEDUP: re-recording the same service on every nmap scan produced duplicate
+	 * candidates (a `-p-` scan even labels a port differently than `-sV`). */
+	findByPort(targetId: number, port: number, protocol: string): FindingRow | undefined;
+	/** Fill in / upgrade a fingerprint from a richer scan (a `-sV` scan carrying a
+	 * product wins; otherwise only null fields are filled). Never creates a row. */
+	enrichFingerprint(id: number, patch: { service?: string | null; product?: string | null; version?: string | null }): void;
 	/**
 	 * Gate 1 promotion — the ONLY path from `candidate` to `validated`
 	 * (Architecture §4.4). Enforced here, in one place, so no other code can
@@ -123,6 +130,8 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'candidate')`,
 	);
 	const selectById = db.prepare("SELECT * FROM findings WHERE id = ?");
+	const selectByPort = db.prepare("SELECT * FROM findings WHERE target_id = ? AND port = ? AND protocol = ? ORDER BY id LIMIT 1");
+	const enrichStmt = db.prepare("UPDATE findings SET service = ?, product = ?, version = ? WHERE id = ?");
 	const selectValidationById = db.prepare("SELECT * FROM validations WHERE id = ?");
 	const updateStatus = db.prepare("UPDATE findings SET status = ? WHERE id = ? AND status = 'candidate'");
 	const updateSubmitted = db.prepare("UPDATE findings SET status = 'submitted' WHERE id = ? AND status = 'validated'");
@@ -179,6 +188,17 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 		},
 		getById(id) {
 			return selectById.get(id) as FindingRow | undefined;
+		},
+		findByPort(targetId, port, protocol) {
+			return selectByPort.get(targetId, port, protocol) as FindingRow | undefined;
+		},
+		enrichFingerprint(id, patch) {
+			const f = requireFinding(id);
+			const richer = patch.product != null && patch.product !== ""; // a -sV scan carries product
+			const service = richer ? (patch.service ?? f.service) : (f.service ?? patch.service ?? null);
+			const product = patch.product ?? f.product;
+			const version = patch.version ?? f.version;
+			enrichStmt.run(service, product, version, id);
 		},
 		promote(findingId, validationId) {
 			const finding = requireFinding(findingId);

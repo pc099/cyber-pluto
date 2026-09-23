@@ -81,7 +81,14 @@ export function literalHostPrefix(host: string): string | null {
 export function extractHosts(text: string): string[] {
 	const hosts = new Set<string>();
 
-	for (const m of text.matchAll(/https?:\/\/[^\s'"`|<>]+/gi)) {
+	// A quoted HTTP header value (`-H "X-Forwarded-For: 127.0.0.1"`) is PAYLOAD,
+	// not the connection target — a legitimate ACL/auth-bypass technique. Scrub
+	// header values before the generic host sweeps so the scope rule keys on the
+	// destination, not header content (Decision 0006: this false-blocked a real
+	// auth-bypass attempt and pushed the agent back to brute-forcing).
+	const scrubbed = text.replace(/(?:-H|--header)\s+(?:"[^"]*"|'[^']*')/gi, " ");
+
+	for (const m of scrubbed.matchAll(/https?:\/\/[^\s'"`|<>]+/gi)) {
 		try {
 			const h = literalHostPrefix(new URL(m[0]).hostname);
 			if (h) hosts.add(h);
@@ -89,7 +96,7 @@ export function extractHosts(text: string): string[] {
 			// not a parseable URL; ignore
 		}
 	}
-	for (const m of text.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)) {
+	for (const m of scrubbed.matchAll(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g)) {
 		if (validIpv4(m[0])) {
 			hosts.add(m[0]);
 		}

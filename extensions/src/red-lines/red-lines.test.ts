@@ -106,6 +106,15 @@ test("reading the target's disk image offline is blocked (cheating black-box rec
 	assert.deepEqual(checkRedLines(bash("dd if=/dev/zero of=payload.img bs=1M count=1"), ctx), { allowed: true });
 });
 
+test("an IP inside an -H header is payload (auth-bypass), not the connection target — no false scope block", () => {
+	// Decision 0006: `curl -H "X-Forwarded-For: 127.0.0.1"` against the in-scope
+	// target was wrongly blocked because 127.0.0.1 was extracted from the header.
+	assert.deepEqual(extractHosts('curl -H "X-Forwarded-For: 127.0.0.1" http://10.0.0.5/admin'), ["10.0.0.5"]);
+	assert.deepEqual(checkRedLines(bash('curl -H "X-Forwarded-For: 127.0.0.1" http://10.0.0.5/admin'), ctx), { allowed: true });
+	// A real out-of-scope TARGET is still blocked.
+	assert.equal(checkRedLines(bash("curl http://8.8.8.8/x"), ctx).allowed, false);
+});
+
 test("the disk-image rule is exempt for forensics engagements", () => {
 	const saved = process.env["PLUTO_ENGAGEMENT_CLASS"];
 	process.env["PLUTO_ENGAGEMENT_CLASS"] = "forensics";

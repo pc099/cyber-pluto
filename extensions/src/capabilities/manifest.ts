@@ -57,12 +57,12 @@ export const CAPABILITIES: readonly Capability[] = [
 	{
 		domain: "web",
 		description:
-			"Web application testing — core toolset (nmap, curl, chromium, the Gate 1 validators) PLUS content discovery + fingerprinting: ffuf/gobuster (dir/vhost brute, wordlists at /usr/share/dirb/wordlists/ and /usr/share/wordlists/dirb/), whatweb (tech fingerprint), dirb. Prefer these over hand-rolled curl loops for enumeration.",
+			"Web application testing — core toolset (nmap, curl, chromium, the Gate 1 validators) PLUS content discovery + fingerprinting: ffuf/gobuster (dir/file/vhost brute), whatweb (tech fingerprint), cewl (custom wordlist from the site). CONTENT-DISCOVERY RECIPE (this is how you reach non-obvious paths like an upload endpoint): run gobuster/ffuf against SecLists /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt AND raft-large-files.txt, ALWAYS with -x php,txt,bak,html (append extensions — a .php file lands under its bare word), and escalate the wordlist when a small one finds nothing. cewl the site to mine target-specific terms. Map the UNAUTHENTICATED surface before brute-forcing any auth. Prefer these over hand-rolled curl loops.",
 		detect: ["http", "https", "web app", "url", "api endpoint", "vhost"],
-		skill: undefined,
-		apt: ["ffuf", "gobuster", "whatweb", "dirb"],
+		skill: "web-content-discovery",
+		apt: ["ffuf", "gobuster", "whatweb", "dirb", "cewl"],
 		pip: [],
-		verify: `command -v curl && command -v nmap && command -v ffuf && command -v gobuster`,
+		verify: `command -v ffuf && command -v gobuster && command -v cewl && test -f /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt`,
 	},
 ];
 

@@ -70,3 +70,10 @@ echo "     cd $DEPLOY && ./cyberpluto <target> --sandbox --headless"
 echo "  The kill switch stays root-owned: touch $DEPLOY/state/KILL_SWITCH to halt."
 echo "  Rebuild after a code change: (as root) cd $DEPLOY/extensions && npm run build,"
 echo "  then re-run this script to re-freeze."
+
+echo "[*] SecLists web-content wordlists (Decision 0006 — real content discovery)"
+SLDIR=/usr/share/seclists/Discovery/Web-Content
+mkdir -p "$SLDIR"
+for w in raft-large-directories.txt raft-large-files.txt; do
+  [ -s "$SLDIR/$w" ] || curl -fsSL "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/$w" -o "$SLDIR/$w" && echo "    $w ready" || echo "    WARN: could not fetch $w"
+done

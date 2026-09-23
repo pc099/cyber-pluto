@@ -74,6 +74,15 @@ async function growTreeFromNmapOutput(cwd: string, output: string): Promise<void
 	}
 	const openServices = parseNmapServices(output).filter((svc) => svc.state === "open");
 	for (const svc of openServices) {
+		// DEDUP (Decision 0006): recon fires on every nmap; without this it
+		// re-recorded the same service as a new candidate + new nodes each scan.
+		// If we've already recorded this (target, port, protocol), just enrich the
+		// fingerprint from the (possibly richer) scan and move on — no duplicates.
+		const existing = engagement.repos.findings.findByPort(engagement.targetId, svc.port, svc.protocol);
+		if (existing) {
+			engagement.repos.findings.enrichFingerprint(existing.id, { service: svc.service, product: svc.product, version: svc.version });
+			continue;
+		}
 		const portNode = engagement.repos.nodes.create({
 			targetId: engagement.targetId,
 			parentId: engagement.rootNodeId,
