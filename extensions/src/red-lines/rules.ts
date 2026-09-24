@@ -316,10 +316,25 @@ const DESTRUCTIVE_RULE = patternRule({
 	description: "Data deletion, encryption, disabling security controls, or actions without documented rollback.",
 	reason: "Destructive or irreversible action on the target",
 	patterns: [
-		/\brm\s+-[rfRimd]*f[rfRimd]*\s+(\/|~|\*)/i, // rm -rf on a root-ish path
+		// --- File/data DESTRUCTION — EFFECT-based, mechanism-agnostic. ---
+		// The gate is the *effect* (irreversible removal/overwrite of a real
+		// path), not one literal tool: rewording `rm -f` to `unlink`, `shred`,
+		// `find -delete`, `truncate`, or a `dd`/`>` clobber must NOT slip past
+		// (the run-3 lesson — a benign cleanup got through by swapping `rm -f`
+		// for `unlink`, which means a genuinely destructive command could too).
+		// A relative path in the cwd (`rm -f ./scratch`) still passes; a root/
+		// home/wildcard/system target fires — a false positive only asks the
+		// operator to approve, a false negative runs the destruction.
+		/\brm\s+-[rfRimd]*[rf][rfRimd]*\s+(\/|~|\$HOME\b|\*)/i, // rm -rf/-f on root/home/wildcard
+		/\bunlink\s+(\/|~|\$HOME\b|\S*\*)/i, // unlink <abs/home/glob> — the exact reword that evaded
+		/\bfind\b[^\n]*\s-delete\b/i, // find … -delete
+		/\bfind\b[^\n]*-exec\s+(rm|unlink|shred)\b/i, // find … -exec rm/unlink/shred
+		/\btruncate\s+-s\s*0\s+\/(?:etc|bin|sbin|usr|var|boot|lib|root|home)\//i, // truncate a system file to empty
+		/>\s*\/(?:etc|bin|sbin|usr|var|boot|lib|root|home)\/\S/i, // clobber a system file via redirect (incl. `: > /etc/…`)
+		/\bcp\s+\/dev\/null\s+\/(?:etc|bin|sbin|usr|var|boot|lib|root)\//i, // cp /dev/null over a system file
+		/\bdd\b[^\n]*\bof=\/(?:dev\/(?:sd|nvme|vd|hd)\w+|etc\/|bin\/|sbin\/|boot\/|usr\/|lib\/)/i, // raw device write OR byte-patch of a system file
 		/\bmkfs(\.\w+)?\b/i,
-		/\bdd\b[^\n]*\bof=\/dev\/(sd|nvme|vd|hd)\w+/i,
-		/\b(shred|wipe)\b/i,
+		/\b(shred|wipe|wipefs)\b/i,
 		/\bDROP\s+(TABLE|DATABASE|SCHEMA)\b/i,
 		/\bTRUNCATE\s+TABLE\b/i,
 		/\bDELETE\s+FROM\b(?![^\n]*\bWHERE\b)/i, // DELETE without WHERE

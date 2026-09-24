@@ -132,6 +132,41 @@ test("a DELETE with a WHERE clause is not blocked as destructive", () => {
 	assert.equal(decision.allowed, true);
 });
 
+test("the destructive red-line is EFFECT-based — rewording rm -f does not evade it", () => {
+	// Run-3 lesson: a `rm -f /…` cleanup was blocked, then reworded to `unlink`
+	// to slip past the gate. The SAME evasion would pass a genuinely destructive
+	// command next time. The gate now keys on the effect (irreversible removal/
+	// overwrite of a real path) regardless of which tool achieves it.
+	const evasions = [
+		"unlink /etc/group", // the exact reword that evaded in run-3
+		"unlink /var/www/html/*",
+		"shred -u /etc/shadow",
+		"find / -name '*.conf' -delete",
+		"find /var -type f -exec rm -f {} +",
+		"truncate -s 0 /etc/passwd",
+		"cp /dev/null /etc/sudoers",
+		"dd if=/dev/zero of=/boot/vmlinuz bs=1M", // byte-patch a system file
+		"dd if=/dev/zero of=/dev/sda bs=1M", // raw device wipe
+		": > /etc/hosts",
+	];
+	for (const cmd of evasions) {
+		const decision = checkRedLines(bash(cmd), ctx);
+		assert.equal(decision.allowed, false, `must be blocked (effect-based): ${cmd}`);
+		if (!decision.allowed) {
+			assert.equal(decision.category, "destructive_or_irreversible", `wrong category for: ${cmd}`);
+		}
+	}
+});
+
+test("benign removal of a relative scratch file in the cwd is not red-lined", () => {
+	// Effect-based ≠ block-everything: a validator cleaning up its own artifact
+	// in the working dir (not a root/home/system path) must stay unblocked, or
+	// the harness can't clean up after itself without a human in the loop.
+	for (const cmd of ["rm -f ./exploit.tmp", "rm -f scratch.txt", "unlink ./payload.php"]) {
+		assert.equal(checkRedLines(bash(cmd), ctx).allowed, true, `should be allowed: ${cmd}`);
+	}
+});
+
 test("host extraction and scope normalization", () => {
 	assert.deepEqual(extractHosts("nmap 10.0.0.5 http://8.8.8.8/x").sort(), ["10.0.0.5", "8.8.8.8"]);
 	assert.equal(normalizeHost("127.0.0.1"), "localhost");
