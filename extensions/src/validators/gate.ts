@@ -11,6 +11,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { evidenceBaseDir } from "../state/db.js";
 import type { Engagement } from "../state/engagement.js";
 import { IllegalStatusTransition } from "../state/findings-repo.js";
+import { FOOTHOLD_CLASSES, PRIVESC_DIRECTIVE, seedPrivescLeads } from "./foothold-orchestration.js";
 import type { CapturedExchange, VerifiableStep } from "./report.js";
 
 const evidenceDir = (): string => join(evidenceBaseDir(), "validations");
@@ -66,6 +67,11 @@ export async function recordAndGate(
 			? engagement.repos.findings.promote(findingId, validation.id)
 			: engagement.repos.findings.reject(findingId);
 		const verdict = report.passed ? "VALIDATED" : "REJECTED";
+		// Autonomy: a validated code-execution foothold auto-seeds the privesc
+		// checklist into the tree AND tells the agent to pivot — so it doesn't
+		// stall at the foothold waiting for an operator to name the vectors.
+		const isFoothold = report.passed && FOOTHOLD_CLASSES.has(report.validator);
+		if (isFoothold) seedPrivescLeads(engagement);
 		return {
 			content: [
 				{
@@ -75,10 +81,11 @@ export async function recordAndGate(
 						`validations row #${validation.id} (passed=${report.passed ? 1 : 0})\n` +
 						`${report.diffSummary}\n` +
 						`Verifiable steps:\n${renderSteps(report)}\n` +
-						`Evidence: ${baselineRef}, ${attackRef}`,
+						`Evidence: ${baselineRef}, ${attackRef}` +
+						(isFoothold ? `\n\n${PRIVESC_DIRECTIVE}` : ""),
 				},
 			],
-			details: { validationId: validation.id, passed: report.passed, status: updated.status },
+			details: { validationId: validation.id, passed: report.passed, status: updated.status, footholdSeeded: isFoothold },
 		};
 	} catch (err) {
 		if (err instanceof IllegalStatusTransition) {
