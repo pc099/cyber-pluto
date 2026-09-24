@@ -283,6 +283,11 @@ const FALSE_FLAG_RULE = patternRule({
 		/>\s*\/var\/log\/\S+/i,
 		/\blastlog\b[^\n]*>\s*\/dev\/null/i,
 		/\bunset\s+HISTFILE\b|\bhistory\s+-c\b/i,
+		// Self-protection: the reasoning core must never touch the red-line
+		// approval/block ledgers — those are written ONLY by the operator `/allow`
+		// console command. Any tool command referencing them is an attempt to forge
+		// its own exception (gate tampering), so it is itself red-lined.
+		/red-line-approvals|red-line-blocks/i,
 	],
 });
 

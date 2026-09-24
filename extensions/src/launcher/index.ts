@@ -349,7 +349,7 @@ async function main(): Promise<void> {
 		(plan.attackProvider || plan.attackModel ? `  attack      ${plan.attackProvider ?? plan.provider ?? "default"} / ${plan.attackModel ?? plan.model ?? "default"}\n` : "") +
 		`  kill switch touch ${join(root, "state/KILL_SWITCH")}\n` +
 		`  ---------------------------------------------------------------\n` +
-		`  Console: /pluto menu · /status /findings /nodes /creds · /approve (Gate 2) · /kill\n\n`,
+		`  Console: /pluto menu · /status /findings /nodes /creds · /approve (Gate 2) · /blocks /allow (red-line) · /kill\n\n`,
 	);
 
 	if (plan.dryRun) {

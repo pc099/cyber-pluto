@@ -202,6 +202,21 @@ test("port 20000 (Webmin/Usermin) is NOT flagged as an OT/safety-of-life target"
 	assert.equal(checkRedLines(bash("nmap -p502 10.0.0.5"), ctx).allowed, false);
 });
 
+test("the approval ledger is self-protected — the model cannot write it to forge a grant", () => {
+	// Defense-in-depth for the /allow channel: any tool command that references
+	// the approval/block ledger is itself red-lined, so a model (even root, in a
+	// non-sandbox run) cannot forge its own exception by writing the file.
+	for (const cmd of [
+		"echo '{\"grant\":{}}' >> state/red-line-approvals.jsonl",
+		"cat state/red-line-blocks.jsonl",
+		"sed -i 's/x/y/' engagements/x/state/red-line-approvals.jsonl",
+	]) {
+		const d = checkRedLines(bash(cmd), ctx);
+		assert.equal(d.allowed, false, `must be blocked: ${cmd}`);
+		if (!d.allowed) assert.equal(d.category, "false_flag_or_evidence_tampering");
+	}
+});
+
 test("host extraction and scope normalization", () => {
 	assert.deepEqual(extractHosts("nmap 10.0.0.5 http://8.8.8.8/x").sort(), ["10.0.0.5", "8.8.8.8"]);
 	assert.equal(normalizeHost("127.0.0.1"), "localhost");
