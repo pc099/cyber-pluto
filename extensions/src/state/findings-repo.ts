@@ -110,6 +110,11 @@ export interface FindingsRepo {
 	markSubmitted(findingId: number): FindingRow;
 	listByTarget(targetId: number): FindingRow[];
 	countByStatus(targetId: number): { candidate: number; validated: number; submitted: number; rejected: number };
+	/** True if this target has a Gate-1 promotion by one of the given foothold-
+	 * class validators — a proxy for "code-execution foothold achieved", used to
+	 * steer lifecycle guidance (pre- vs post-foothold). A promotion row only
+	 * exists for a validated finding, so this is a validated fact, not a guess. */
+	hasValidatedFootholdClass(targetId: number, validators: readonly string[]): boolean;
 }
 
 export interface FindingsRepoOptions {
@@ -312,6 +317,14 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 				if (row.status in counts) counts[row.status as keyof typeof counts] = row.c;
 			}
 			return counts;
+		},
+		hasValidatedFootholdClass(targetId, validators) {
+			if (validators.length === 0) return false;
+			const placeholders = validators.map(() => "?").join(",");
+			const row = db
+				.prepare(`SELECT COUNT(*) AS c FROM promotions WHERE target_id = ? AND validator IN (${placeholders})`)
+				.get(targetId, ...validators) as { c: number };
+			return row.c > 0;
 		},
 	};
 }

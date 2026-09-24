@@ -29,6 +29,9 @@ export interface AttemptsRepo {
 	/** The most recent full attempt rows for a target (newest first) — the
 	 * operator console's audit feed. */
 	recentByTarget(targetId: number, limit: number): AttemptRow[];
+	/** Every command ever run for this target (oldest→newest). Bounded by the
+	 * tool-call cap (a few hundred), so cheap — used for per-class try budgets. */
+	allCommandsByTarget(targetId: number): string[];
 }
 
 export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
@@ -46,6 +49,7 @@ export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
 		"SELECT command FROM attempts WHERE target_id = ? ORDER BY id DESC LIMIT ?",
 	);
 	const recentRowsStmt = db.prepare("SELECT * FROM attempts WHERE target_id = ? ORDER BY id DESC LIMIT ?");
+	const allCommandsStmt = db.prepare("SELECT command FROM attempts WHERE target_id = ? ORDER BY id ASC");
 
 	return {
 		start(input) {
@@ -74,6 +78,9 @@ export function createAttemptsRepo(db: DatabaseSync): AttemptsRepo {
 		},
 		recentByTarget(targetId, limit) {
 			return recentRowsStmt.all(targetId, limit) as unknown as AttemptRow[];
+		},
+		allCommandsByTarget(targetId) {
+			return (allCommandsStmt.all(targetId) as Array<{ command: string }>).map((r) => r.command);
 		},
 	};
 }

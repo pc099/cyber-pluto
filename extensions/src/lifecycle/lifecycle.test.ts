@@ -6,7 +6,15 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkHardCaps, detectStuck, detectUnhealthy, repeatCount } from "./checks.js";
+import {
+	checkHardCaps,
+	checkTryBudget,
+	classifyAttack,
+	DEFAULT_TRY_BUDGET,
+	detectStuck,
+	detectUnhealthy,
+	repeatCount,
+} from "./checks.js";
 
 const CAPS = { maxToolCalls: 200, maxWallClockSeconds: 3600, maxTokens: 4_000_000 };
 
@@ -67,4 +75,53 @@ test("growing the tree clears the no-new-nodes stall", () => {
 test("repeatCount matches only exact commands", () => {
 	assert.equal(repeatCount("x -a", ["x -a", "x -b", " x -a "]), 2);
 	assert.equal(repeatCount("x -a", ["x -b", "x -c"]), 0);
+});
+
+// --- Try-budget: pivot before grinding an expensive/low-yield class ---------
+
+test("classifyAttack buckets brute/crack/fuzz and leaves ordinary commands alone", () => {
+	assert.equal(classifyAttack("hydra -l admin -P rockyou.txt 10.0.0.5 ssh"), "brute_auth");
+	assert.equal(classifyAttack("medusa -h 10.0.0.5 -u root -P list -M ssh"), "brute_auth");
+	assert.equal(classifyAttack("john --wordlist=rockyou.txt hash.txt"), "hash_crack");
+	assert.equal(classifyAttack("hashcat -m 1800 hash.txt rockyou.txt"), "hash_crack");
+	assert.equal(classifyAttack("gobuster dir -u http://10.0.0.5 -w raft-large.txt"), "web_fuzz");
+	// A fuzzer used as an auth brute (POST/login/data) is brute_auth, not fuzz.
+	assert.equal(classifyAttack("ffuf -u http://10.0.0.5/login -X POST -d 'user=admin&pass=FUZZ' -w rockyou.txt"), "brute_auth");
+	// Plain content discovery with ffuf stays web_fuzz.
+	assert.equal(classifyAttack("ffuf -u http://10.0.0.5/FUZZ -w raft-large-files.txt -x php"), "web_fuzz");
+	assert.equal(classifyAttack("nmap -sV 10.0.0.5"), null);
+	assert.equal(classifyAttack("curl http://10.0.0.5/"), null);
+});
+
+test("try-budget passes under the limit and blocks over it, forcing a pivot", () => {
+	const prior = Array.from({ length: 4 }, (_, i) => `hydra run ${i}`); // 4 brute attempts so far
+	// The 5th (spent=4, limit=5) still passes.
+	assert.equal(checkTryBudget({ command: "hydra -l admin -P rockyou 10.0.0.5 ssh", priorCommands: prior, budget: DEFAULT_TRY_BUDGET, hasValidatedFoothold: false }).over, false);
+	// A 6th, once 5 are on the ledger (spent=5, limit=5), is blocked.
+	const prior5 = [...prior, "hydra -l root -P rockyou 10.0.0.5 ftp"];
+	const v = checkTryBudget({ command: "hydra -l admin -P rockyou 10.0.0.5 ssh", priorCommands: prior5, budget: DEFAULT_TRY_BUDGET, hasValidatedFoothold: false });
+	assert.equal(v.over, true);
+	if (v.over) {
+		assert.equal(v.cls, "brute_auth");
+		assert.equal(v.spent, 5);
+		assert.match(v.guidance, /unauthenticated surface|content discovery/);
+	}
+});
+
+test("try-budget guidance differs pre- vs post-foothold for auth brute", () => {
+	const prior = Array.from({ length: 5 }, (_, i) => `hydra run ${i}`);
+	const post = checkTryBudget({ command: "hydra x", priorCommands: prior, budget: DEFAULT_TRY_BUDGET, hasValidatedFoothold: true });
+	assert.equal(post.over, true);
+	if (post.over) assert.match(post.guidance, /privilege escalation|privesc/i);
+});
+
+test("a non-budgeted command is never blocked no matter the history", () => {
+	const prior = Array.from({ length: 50 }, (_, i) => `hydra run ${i}`);
+	assert.equal(checkTryBudget({ command: "nmap -sV 10.0.0.5", priorCommands: prior, budget: DEFAULT_TRY_BUDGET, hasValidatedFoothold: false }).over, false);
+});
+
+test("content discovery gets a high ceiling, not the tight brute ceiling", () => {
+	const prior = Array.from({ length: 10 }, (_, i) => `gobuster dir run ${i}`); // 10 fuzz attempts
+	// Well under web_fuzz budget (40) — still productive, not blocked.
+	assert.equal(checkTryBudget({ command: "gobuster dir -u http://x -w w.txt", priorCommands: prior, budget: DEFAULT_TRY_BUDGET, hasValidatedFoothold: false }).over, false);
 });

@@ -30,7 +30,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getEngagement, startEngagement } from "../state/engagement.js";
 import { stateDir } from "../state/db.js";
-import { checkHardCaps, detectStuck, detectUnhealthy } from "./checks.js";
+import { FOOTHOLD_CLASSES } from "../validators/foothold-orchestration.js";
+import { checkHardCaps, checkTryBudget, DEFAULT_TRY_BUDGET, detectStuck, detectUnhealthy } from "./checks.js";
 
 const LOG = { dir: "logs", file: "lifecycle.jsonl" };
 
@@ -205,14 +206,31 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 			};
 		}
 
-		// 3. Stuck detection — nudge to KB/skill first, escalate only if it persists.
+		// 3. Try-budget — a per-class ceiling on high-cost/low-yield attack
+		// classes (auth brute, hash crack) so the harness pivots on its own
+		// instead of grinding (run-2: one hydra call = ~173k requests; run-3: ~7
+		// hydra runs before the operator forced a pivot). Content discovery gets
+		// a high ceiling — it is the productive enumeration, not thrash.
+		const thisCommand = commandText(event);
+		const budgetVerdict = checkTryBudget({
+			command: thisCommand,
+			priorCommands: engagement.repos.attempts.allCommandsByTarget(engagement.targetId),
+			budget: DEFAULT_TRY_BUDGET,
+			hasValidatedFoothold: engagement.repos.findings.hasValidatedFootholdClass(engagement.targetId, [...FOOTHOLD_CLASSES]),
+		});
+		if (budgetVerdict.over) {
+			await logEvent(ctx.cwd, { kind: "try_budget_pivot", cls: budgetVerdict.cls, spent: budgetVerdict.spent, reason: budgetVerdict.reason });
+			return { block: true, reason: budgetVerdict.guidance };
+		}
+
+		// 4. Stuck detection — nudge to KB/skill first, escalate only if it persists.
 		const recentCommands = engagement.repos.attempts.recentCommandsByTarget(engagement.targetId, cfg.stuckWindow);
 		const nodeCountNow = engagement.repos.nodes.countByTarget(engagement.targetId);
 		state.nodeCountHistory.push(nodeCountNow);
 		const windowStartIdx = Math.max(0, state.nodeCountHistory.length - cfg.stuckWindow - 1);
 		const nodeCountAtWindowStart = state.nodeCountHistory[windowStartIdx] ?? nodeCountNow;
 		const stuck = detectStuck({
-			command: commandText(event),
+			command: thisCommand,
 			recentCommands,
 			repeatThreshold: cfg.stuckRepeatThreshold,
 			nodeCountAtWindowStart,

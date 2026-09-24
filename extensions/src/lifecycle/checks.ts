@@ -67,6 +67,80 @@ export function repeatCount(command: string, recentCommands: string[]): number {
 	return recentCommands.filter((c) => c.trim() === norm).length;
 }
 
+/**
+ * Per-class TRY BUDGET (§10.5, run-2/run-3 lesson). Some attack classes are
+ * high-cost and low-yield when they don't hit fast: a SINGLE `hydra` call fired
+ * ~173k requests in run-2, and run-3 spent ~7 hydra runs — the maxToolCalls cap
+ * never catches a per-request blow-up, and each brute/crack call is a NOVEL
+ * command so stuck-detection reads it as progress, not a stall. So the harness
+ * caps how many attempts of each expensive class an engagement may spend before
+ * it MUST pivot — the deterministic version of the pivot the operator had to
+ * force by hand. Content discovery (gobuster/ffuf dir brute) is the PRODUCTIVE
+ * enumeration the web skill wants, so it gets a high ceiling, not a tight one.
+ */
+export type AttackClass = "brute_auth" | "hash_crack" | "web_fuzz";
+
+// First match wins; brute_auth is tested before web_fuzz so an auth brute via a
+// fuzzer (ffuf/wfuzz with a login/data/Authorization payload) counts as brute,
+// not content discovery.
+const ATTACK_CLASS_SIGNATURES: Array<{ cls: AttackClass; re: RegExp }> = [
+	{ cls: "brute_auth", re: /\b(hydra|medusa|ncrack|patator|crowbar|thc-hydra)\b/i },
+	{ cls: "brute_auth", re: /\b(ffuf|wfuzz)\b[^\n]*(?:-d\b|--data|Authorization|\blogin\b|passw|-x\s+POST|-X\s+POST)/i },
+	{ cls: "hash_crack", re: /\b(john|hashcat)\b/i },
+	{ cls: "web_fuzz", re: /\b(gobuster|dirb|dirbuster|feroxbuster|ffuf|wfuzz)\b/i },
+];
+
+export function classifyAttack(command: string): AttackClass | null {
+	for (const { cls, re } of ATTACK_CLASS_SIGNATURES) {
+		if (re.test(command)) return cls;
+	}
+	return null;
+}
+
+export type TryBudget = Record<AttackClass, number>;
+
+export const DEFAULT_TRY_BUDGET: TryBudget = {
+	brute_auth: 5, // run-3 spent ~7 hydra runs before the operator forced a pivot
+	hash_crack: 4, // no GPU here: rockyou + rockyou-rules per hash, then it's dead
+	web_fuzz: 40, // enumeration is productive — a high ceiling, not a tight one
+};
+
+export interface TryBudgetInput {
+	/** The command about to run. */
+	command: string;
+	/** Every command already run for this target (the attempts ledger). */
+	priorCommands: string[];
+	budget: TryBudget;
+	/** A validated code-execution foothold exists — changes the pivot guidance
+	 * (post-foothold cracking is legitimate privesc, pre-foothold brute is not). */
+	hasValidatedFoothold: boolean;
+}
+
+export type BudgetVerdict = { over: false } | { over: true; cls: AttackClass; spent: number; reason: string; guidance: string };
+
+export function checkTryBudget(input: TryBudgetInput): BudgetVerdict {
+	const cls = classifyAttack(input.command);
+	if (!cls) return { over: false };
+	const spent = input.priorCommands.filter((c) => classifyAttack(c) === cls).length;
+	const limit = input.budget[cls];
+	if (spent < limit) return { over: false };
+	const pivotHint =
+		cls === "brute_auth"
+			? input.hasValidatedFoothold
+				? "you already have a foothold — brute-forcing more auth is off-path; work privilege escalation instead"
+				: "map more unauthenticated surface (content discovery, other services/ports) before more auth brute — the way in is rarely a guessed password"
+			: cls === "hash_crack"
+				? "there is no GPU here; if rockyou + rules did not crack it, the hash is not the way — read the plaintext from a config/backup/history with the access you have, or pivot to another vector"
+				: "content discovery is exhausted for this wordlist — escalate the wordlist deliberately or pivot to a different service/technique";
+	return {
+		over: true,
+		cls,
+		spent,
+		reason: `try-budget for '${cls}' exhausted (${spent}/${limit} attempts)`,
+		guidance: `Try-budget for '${cls}' reached (${spent}/${limit}). This class is not producing progress — ${pivotHint}. This call is blocked to force a pivot (§10.5); a genuinely different technique is the way forward, not another '${cls}' attempt.`,
+	};
+}
+
 export interface StuckInput {
 	command: string;
 	recentCommands: string[];
