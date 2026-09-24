@@ -77,3 +77,11 @@ mkdir -p "$SLDIR"
 for w in raft-large-directories.txt raft-large-files.txt; do
   [ -s "$SLDIR/$w" ] || curl -fsSL "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/$w" -o "$SLDIR/$w" && echo "    $w ready" || echo "    WARN: could not fetch $w"
 done
+
+echo "[*] Privilege-escalation + cracking toolset (Decision 0006 autonomy follow-on)"
+mkdir -p /opt/privesc /usr/share/wordlists
+[ -s /opt/privesc/linpeas.sh ] || curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh" -o /opt/privesc/linpeas.sh && chmod +x /opt/privesc/linpeas.sh
+[ -s /opt/privesc/pspy64 ]     || curl -fsSL "https://github.com/DominicBreuker/pspy/releases/latest/download/pspy64" -o /opt/privesc/pspy64 && chmod +x /opt/privesc/pspy64
+[ -s /opt/privesc/lse.sh ]     || curl -fsSL "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh" -o /opt/privesc/lse.sh && chmod +x /opt/privesc/lse.sh
+[ -s /usr/share/wordlists/rockyou.txt ] || curl -fsSL "https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt" -o /usr/share/wordlists/rockyou.txt
+echo "    privesc toolset ready (linpeas/pspy/lse + rockyou)"

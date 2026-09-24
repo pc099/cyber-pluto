@@ -55,6 +55,16 @@ export const CAPABILITIES: readonly Capability[] = [
 		verify: `command -v tshark && command -v binwalk`,
 	},
 	{
+		domain: "privilege-escalation",
+		description:
+			"Linux privilege escalation (foothold → root) + password cracking. Enumerate FIRST with the local scripts (/opt/privesc/linpeas.sh, lse.sh, pspy64), then work vectors in order: sudo -l, SUID/SGID (GTFOBins), kernel exploit (match uname -a → Dirty Pipe CVE-2022-0847 for 5.8-5.16 / PwnKit / DirtyCow), writable cron/configs, capabilities, credential reuse. Crack hashes with hashid → john/hashcat + rockyou (/usr/share/wordlists/rockyou.txt) + rules (best64), time-boxed — pivot if it fails. Load the linux-privilege-escalation + password-cracking skills.",
+		detect: ["foothold", "shell", "www-data", "privilege escalation", "root", "suid", "sudo", "kernel exploit", "hash", "crack"],
+		skill: "linux-privilege-escalation",
+		apt: ["john", "hashid"],
+		pip: [],
+		verify: `command -v john && command -v hashid && test -f /opt/privesc/linpeas.sh && test -f /usr/share/wordlists/rockyou.txt`,
+	},
+	{
 		domain: "web",
 		description:
 			"Web application testing — core toolset (nmap, curl, chromium, the Gate 1 validators) PLUS content discovery + fingerprinting: ffuf/gobuster (dir/file/vhost brute), whatweb (tech fingerprint), cewl (custom wordlist from the site). CONTENT-DISCOVERY RECIPE (this is how you reach non-obvious paths like an upload endpoint): run gobuster/ffuf against SecLists /usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt AND raft-large-files.txt, ALWAYS with -x php,txt,bak,html (append extensions — a .php file lands under its bare word), and escalate the wordlist when a small one finds nothing. cewl the site to mine target-specific terms. Map the UNAUTHENTICATED surface before brute-forcing any auth. Prefer these over hand-rolled curl loops.",
