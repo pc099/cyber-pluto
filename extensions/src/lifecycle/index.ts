@@ -17,7 +17,7 @@
  *     Chaitanya. A bypass/evasion mutation is a DIFFERENT call, so it reads as
  *     progress, not repetition (§6.5.2).
  */
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -33,6 +33,7 @@ import { stateDir } from "../state/db.js";
 import { FOOTHOLD_CLASSES } from "../validators/foothold-orchestration.js";
 import { checkHardCaps, checkTryBudget, classifyAttack, DEFAULT_TRY_BUDGET, detectStuck, detectUnhealthy } from "./checks.js";
 import { buildRunSummary } from "./run-summary.js";
+import { resolveVerifier } from "../state/promotion-verifier.js";
 import type { Engagement } from "../state/engagement.js";
 
 const LOG = { dir: "logs", file: "lifecycle.jsonl" };
@@ -133,6 +134,7 @@ async function publishRunSummary(cwd: string, engagement: Engagement, stopReason
 			stopReason,
 			counts: engagement.repos.findings.countByStatus(tid),
 			untrustedValidated: engagement.repos.findings.listUntrustedValidated(tid).length,
+			signatureEnforced: resolveVerifier() !== undefined,
 			credsRecovered: engagement.repos.credentials.listByTarget(tid).length,
 			nodeCount: engagement.repos.nodes.countByTarget(tid),
 			attemptCount: engagement.repos.attempts.countByTarget(tid),
@@ -179,6 +181,31 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		// harness: a stale pause blocked every tool call with no way to resume.)
 		try {
 			rmSync(pausePath(ctx.cwd), { force: true });
+		} catch {
+			/* best effort */
+		}
+		// Footgun guard (board fix): a bare `pi` (not the `pluto` launcher) sets no
+		// PLUTO_TARGET_HOST, so the engagement falls back to the shared default DB
+		// whose target is loopback — and the REAL target then reads as out-of-scope,
+		// silently wasting a whole session. Warn loudly so the operator relaunches
+		// via the launcher instead of grinding against the wrong scope.
+		const host = (process.env["PLUTO_TARGET_HOST"] ?? "").trim().toLowerCase();
+		if (host === "" || host === "127.0.0.1" || host === "localhost" || host === "::1") {
+			console.error(
+				"[pluto/lifecycle] ⚠ No real target set (PLUTO_TARGET_HOST is unset/loopback). " +
+					"You are probably on the default engagement — the real target will read as OUT OF SCOPE. " +
+					"Launch via:  pluto --target <ip> --scope <ip> --label <name>  (not bare `pi`).",
+			);
+		}
+		// Doctrine guard: hand-written "engagement complete" files are NOT
+		// authoritative — the state-DB ledger is the only source of completion
+		// truth. Warn if any resurfaced at the repo root (they must never be trusted).
+		try {
+			for (const f of readdirSync(ctx.cwd)) {
+				if (/ENGAGEMENT_COMPLETE/i.test(f)) {
+					console.error(`[pluto/lifecycle] ⚠ Ignoring hand-written completion file '${f}' — the ledger (/summary, list_findings) is the ONLY source of completion truth.`);
+				}
+			}
 		} catch {
 			/* best effort */
 		}

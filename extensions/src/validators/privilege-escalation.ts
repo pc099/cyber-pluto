@@ -113,6 +113,16 @@ export async function validatePrivilegeEscalation(target: PrivescTarget): Promis
 	// The read probe sends the file to /dev/null and echoes ONLY the exit code —
 	// the secret is never captured, only whether the read was permitted.
 	const readProbe = `'cat ${shadow} >/dev/null 2>&1; echo ${nonce}_RC=$?'`;
+	// CONTROL read of a world-readable file. This closes a false-positive the
+	// board found: the baseline's shadow read failing (rc!=0) is only proof of a
+	// PERMISSION denial if the baseline channel can actually read files at all.
+	// A mis-quoted / mangled template can make `cat` fail for a NON-permission
+	// reason (split args, bad path) while still emitting the RC line — which would
+	// otherwise read as "denied" and, paired with a legit escalated read, pass. So
+	// we require the baseline to SUCCEED on a control file first; if it cannot even
+	// read /etc/hostname, the channel is broken and the shadow rc is not trusted.
+	const controlPath = "/etc/hostname";
+	const controlProbe = `'cat ${controlPath} >/dev/null 2>&1; echo ${nonce}_CTL=$?'`;
 
 	// 1. BASELINE must be genuinely unprivileged — else there is nothing to escalate.
 	const baseId = await runTemplate(target.baselineExecTemplate, idProbe, timeout);
@@ -124,7 +134,7 @@ export async function validatePrivilegeEscalation(target: PrivescTarget): Promis
 		passed: baseUnprivileged,
 		detail: baseRanOurProbe
 			? isRoot(baseId.stdout)
-				? "baseline channel is ALREADY root — no escalation to prove"
+				? "baseline returned uid=0 — this almost always means the template QUOTED the placeholder; pass a BARE {probe} (no surrounding quotes), the validator supplies its own quoting"
 				: "baseline confirmed non-root"
 			: "baseline channel did not run our probe (nonce absent) — channel is not usable",
 	});
@@ -153,15 +163,29 @@ export async function validatePrivilegeEscalation(target: PrivescTarget): Promis
 	};
 	const baseReadRc = rc(baseRead);
 	const escReadRc = rc(escRead);
-	// Baseline must be DENIED (non-zero, and it must have actually run) and the
-	// escalated read must SUCCEED (rc 0). Both directions are required.
-	const baselineDenied = baseReadRc !== null && baseReadRc !== 0;
+	// CONTROL: the baseline must be able to read a world-readable file, proving its
+	// read mechanism actually works — so a non-zero rc on the target file is a real
+	// PERMISSION denial, not a broken/mis-quoted template.
+	const baseControl = await runTemplate(target.baselineExecTemplate, controlProbe, timeout);
+	attacks.push(exchange("baseline-control-read", target.baselineExecTemplate, controlProbe, baseControl));
+	const ctlMatch = baseControl.stdout.match(new RegExp(`${nonce}_CTL=(\\d+)`));
+	const baselineReadMechanismOk = ctlMatch !== null && Number(ctlMatch[1]) === 0;
+	steps.push({
+		name: "baseline-read-mechanism",
+		passed: baselineReadMechanismOk,
+		detail: baselineReadMechanismOk
+			? `baseline can read a world-readable control file (${controlPath}) — its read mechanism works, so a denial on ${shadow} is a real permission boundary`
+			: `baseline could NOT read the world-readable control file (${controlPath}) — the channel/template is broken; a non-zero rc on ${shadow} cannot be trusted as a permission denial`,
+	});
+	// Baseline must be DENIED (non-zero) on the target AND have a WORKING read
+	// mechanism (control succeeded), and the escalated read must SUCCEED (rc 0).
+	const baselineDenied = baselineReadMechanismOk && baseReadRc !== null && baseReadRc !== 0;
 	const escalatedAllowed = escReadRc === 0;
 	const impactArtifact = baselineDenied && escalatedAllowed;
 	steps.push({
 		name: "root-only-read-differential",
 		passed: impactArtifact,
-		detail: `${shadow}: baseline rc=${baseReadRc ?? "n/a"} (must be non-zero/denied), escalated rc=${escReadRc ?? "n/a"} (must be 0/allowed)`,
+		detail: `${shadow}: baseline rc=${baseReadRc ?? "n/a"} (must be non-zero/denied with a working read mechanism), escalated rc=${escReadRc ?? "n/a"} (must be 0/allowed)`,
 	});
 
 	// VERDICT: root is a fact only when BOTH the euid signal and the root-only
@@ -174,6 +198,8 @@ export async function validatePrivilegeEscalation(target: PrivescTarget): Promis
 		summary = `Privilege escalation to root reproduced: escalated channel is uid=0 AND read ${shadow} (rc 0) where the unprivileged baseline was denied (rc ${baseReadRc}). Content not retained.`;
 	} else if (!baseUnprivileged) {
 		summary = baseRanOurProbe ? `Baseline channel is already root — no escalation demonstrated.` : `Baseline channel unusable (probe did not run); cannot establish an unprivileged starting point.`;
+	} else if (technicalSignal && !impactArtifact && !baselineReadMechanismOk) {
+		summary = `euid=0 was returned, but the baseline channel could not read the world-readable control file (${controlPath}) — the template is likely broken/mis-quoted, so its denial on ${shadow} is not trustworthy. Fix the template (bare {probe}) and re-run; NOT passing on an unverifiable differential.`;
 	} else if (technicalSignal && !impactArtifact) {
 		summary = `euid=0 was returned but the root-only read differential did NOT hold (baseline rc=${baseReadRc}, escalated rc=${escReadRc}); NOT accepting an unproven banner as root.`;
 	} else {

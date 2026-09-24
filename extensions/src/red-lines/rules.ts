@@ -347,7 +347,7 @@ const DESTRUCTIVE_RULE = patternRule({
 		/\bfind\b[^\n]*\s-delete\b/i, // find … -delete
 		/\bfind\b[^\n]*-exec\s+(rm|unlink|shred)\b/i, // find … -exec rm/unlink/shred
 		/\btruncate\s+-s\s*0\s+\/(?:etc|bin|sbin|usr|var|boot|lib|root|home)\//i, // truncate a system file to empty
-		/>\s*\/(?:etc|bin|sbin|usr|boot|lib|root)\/\S/i, // clobber a system file via redirect (incl. `: > /etc/…`)
+		/>\s*\/(?:etc|bin|sbin|usr|var|boot|lib|root|home)\/\S/i, // clobber a system/user file via redirect (incl. `: > /etc/…`, `> /home/…`)
 		/\bcp\s+\/dev\/null\s+\/(?:etc|bin|sbin|usr|var|boot|lib|root)\//i, // cp /dev/null over a system file
 		/\bdd\b[^\n]*\bof=\/(?:dev\/(?:sd|nvme|vd|hd)\w+|etc\/|bin\/|sbin\/|boot\/|usr\/|lib\/)/i, // raw device write OR byte-patch of a system file
 		/\bmkfs(\.\w+)?\b/i,

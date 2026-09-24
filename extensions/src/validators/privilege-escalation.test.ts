@@ -9,6 +9,7 @@
  * droplet). Elsewhere they skip with a note; the pure-logic guards always run.
  */
 import assert from "node:assert/strict";
+import { writeFileSync, unlinkSync } from "node:fs";
 import { test } from "node:test";
 import { validatePrivilegeEscalation } from "./privilege-escalation.js";
 
@@ -60,6 +61,42 @@ test("a spoofed uid=0 that CANNOT read shadow does NOT pass (impact-artifact car
 	assert.equal(r.impactArtifact, false, "but shadow could not actually be read");
 	assert.equal(r.passed, false, "a fakeable banner without the read differential must not pass");
 	assert.match(r.diffSummary, /banner|differential/i);
+});
+
+test("a baseline whose READ MECHANISM is broken does not pass (false-positive guard)", async () => {
+	// Board-found false positive: if the baseline's read probe fails for a
+	// NON-permission reason (a mis-quoted/mangled template), its rc!=0 must NOT be
+	// counted as a permission denial. Model it cleanly: a baseline channel where
+	// `id` reports a normal unprivileged user but EVERY `cat` fails (rc 1) for a
+	// non-permission reason. Even the world-readable control file then fails, so
+	// the validator must refuse rather than pass on an untrustworthy differential.
+	// A BASH_ENV rcfile injects the two shell functions into the (non-interactive)
+	// bash the validator runs, without any quoting collision.
+	const rc = `/tmp/pluto-privtest-brokenreads-${process.pid}.sh`;
+	writeFileSync(rc, "cat(){ return 1; }\nid(){ echo 'uid=1000(cyber) gid=1000(cyber)'; }\n");
+	try {
+		const BROKEN_READS = `BASH_ENV=${rc} bash -c {probe}`;
+		const r = await validatePrivilegeEscalation({ baselineExecTemplate: BROKEN_READS, escalatedExecTemplate: ROOT_EXEC });
+		const base = r.steps.find((s) => s.name === "baseline-unprivileged");
+		assert.ok(base?.passed, "baseline should look like a normal non-root user (id works)");
+		const ctl = r.steps.find((s) => s.name === "baseline-read-mechanism");
+		assert.ok(ctl && !ctl.passed, "the control-read step should be present and FAILING");
+		assert.equal(r.impactArtifact, false, "a denial for the wrong reason must not count as a real differential");
+		assert.equal(r.passed, false, "must not pass when the baseline read mechanism is unverified");
+		assert.match(r.diffSummary, /control|broken|mis-quoted|template/i);
+	} finally {
+		try { unlinkSync(rc); } catch { /* best effort */ }
+	}
+});
+
+test("a mis-quoted template that makes baseline run as root yields an actionable quoting hint", rootOnly, async () => {
+	// The exact run-lesson: quoting the placeholder collides with the validator's
+	// own quoting and pushes the baseline to root. The rejection must tell the
+	// operator to pass a BARE {probe}, not leave them guessing for 4 tries.
+	const r = await validatePrivilegeEscalation({ baselineExecTemplate: ROOT_EXEC, escalatedExecTemplate: ROOT_EXEC });
+	assert.equal(r.passed, false);
+	const base = r.steps.find((s) => s.name === "baseline-unprivileged");
+	assert.ok(base && /bare \{probe\}|quoted/i.test(base.detail), `expected a quoting hint, got: ${base?.detail}`);
 });
 
 test("an already-root baseline is not counted as an escalation", rootOnly, async () => {

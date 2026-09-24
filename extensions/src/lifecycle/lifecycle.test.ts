@@ -135,6 +135,7 @@ function baseSummaryInput() {
 		counts: { candidate: 0, validated: 0, submitted: 0, rejected: 0 },
 		untrustedValidated: 0, credsRecovered: 0, nodeCount: 0, attemptCount: 0,
 		attemptsByClass: {}, hasFoothold: false, hasRoot: false,
+		signatureEnforced: true,
 		elapsedSeconds: 0, contextTokensSeen: 0,
 	};
 }
@@ -154,9 +155,21 @@ test("run-summary milestone is derived from proven facts, ascending", () => {
 	assert.ok(milestoneRank("foothold") > milestoneRank("candidate_found"));
 });
 
-test("run-summary discounts signature-failing validated findings", () => {
-	const s = buildRunSummary({ ...baseSummaryInput(), counts: { candidate: 0, validated: 3, submitted: 0, rejected: 0 }, untrustedValidated: 2 });
+test("run-summary discounts signature-failing validated findings (enforcement on)", () => {
+	const s = buildRunSummary({ ...baseSummaryInput(), signatureEnforced: true, counts: { candidate: 0, validated: 3, submitted: 0, rejected: 0 }, untrustedValidated: 2 });
 	assert.equal(s.trustworthyValidated, 1, "2 of 3 validated fail Gate-1 signature");
+	assert.equal(s.untrustedValidatedCount, 2);
+	assert.equal(s.unverifiableValidated, 0);
 	assert.equal(s.schema, 1);
 	assert.equal(s.stopReason, "in_progress");
+});
+
+test("run-summary calls unsigned validated UNVERIFIABLE, never trustworthy (enforcement off)", () => {
+	// The board catch: with no verifier (non-sandbox dev run), an unsigned
+	// promotion does not FAIL a signature — it has none — so it must not be
+	// counted as trustworthy. This is the Empire:Breakout #11 situation.
+	const s = buildRunSummary({ ...baseSummaryInput(), signatureEnforced: false, counts: { candidate: 0, validated: 1, submitted: 0, rejected: 0 }, untrustedValidated: 0 });
+	assert.equal(s.trustworthyValidated, 0, "nothing is trustworthy without a verifier");
+	assert.equal(s.unverifiableValidated, 1, "the validated finding is unverifiable, not trusted");
+	assert.equal(s.untrustedValidatedCount, 0);
 });

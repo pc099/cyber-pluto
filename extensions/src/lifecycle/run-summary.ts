@@ -33,6 +33,13 @@ export interface RunSummaryInput {
 	hasFoothold: boolean;
 	/** A validated privilege_escalation (root) exists (promotion-backed). */
 	hasRoot: boolean;
+	/** Was Gate-1 promotion-signature ENFORCEMENT active this run (a verifier
+	 * public key was readable)? Under `--sandbox` the signing daemon runs and a
+	 * verifier is present; a non-sandbox dev run has neither, so a `validated`
+	 * finding is UNVERIFIABLE — neither cryptographically trusted nor proven
+	 * tampered. Conflating unverifiable with trusted is the exact miscount the
+	 * board caught, so this flag is required. */
+	signatureEnforced: boolean;
 	elapsedSeconds: number;
 	contextTokensSeen: number;
 }
@@ -41,8 +48,15 @@ export interface RunSummary extends RunSummaryInput {
 	schema: 1;
 	ts: string;
 	reached: Milestone;
-	/** Trustworthy validated = validated minus signature-failing ones. */
+	/** Validated findings whose promotion signature VERIFIED. Zero when
+	 * enforcement was off — we cannot call anything trustworthy without a verifier. */
 	trustworthyValidated: number;
+	/** Validated findings that FAIL signature verification (possible tampering) —
+	 * only meaningful when enforcement is on. */
+	untrustedValidatedCount: number;
+	/** Validated findings we can NEITHER trust nor flag, because enforcement was
+	 * off (dev/non-sandbox). In that mode this equals the full validated count. */
+	unverifiableValidated: number;
 }
 
 function deriveMilestone(i: RunSummaryInput): Milestone {
@@ -56,11 +70,19 @@ function deriveMilestone(i: RunSummaryInput): Milestone {
 }
 
 export function buildRunSummary(input: RunSummaryInput): RunSummary {
+	const validated = input.counts.validated;
+	// Without enforcement we cannot verify ANY promotion, so nothing is
+	// trustworthy and everything validated is unverifiable. With enforcement,
+	// trustworthy = validated minus the signature-failing ones.
+	const trustworthyValidated = input.signatureEnforced ? Math.max(0, validated - input.untrustedValidated) : 0;
+	const unverifiableValidated = input.signatureEnforced ? 0 : validated;
 	return {
 		schema: 1,
 		ts: new Date().toISOString(),
 		reached: deriveMilestone(input),
-		trustworthyValidated: Math.max(0, input.counts.validated - input.untrustedValidated),
+		trustworthyValidated,
+		untrustedValidatedCount: input.signatureEnforced ? input.untrustedValidated : 0,
+		unverifiableValidated,
 		...input,
 	};
 }

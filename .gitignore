@@ -63,3 +63,8 @@ reports/
 
 # Per-engagement workspaces (state DB, evidence, readouts) — runtime data.
 /engagements/
+
+# Fabricated/hand-written "engagement complete" artifacts are NOT authoritative —
+# the state-DB ledger is the only source of completion truth (board doctrine).
+*ENGAGEMENT_COMPLETE*
+/CAP_*.md

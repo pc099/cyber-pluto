@@ -225,8 +225,8 @@ export default function validatorsExtension(pi: ExtensionAPI): void {
 			"Deterministic Gate 1 validator that root was actually achieved — so an escalation becomes a `validated` ledger fact, not just a transcript claim. You provide two shell-command TEMPLATES, each containing the literal {probe} placeholder: baseline_exec runs a probe as the CURRENT unprivileged user, escalated_exec runs it THROUGH your escalation vector (sudo / a planted SUID bash / a kernel-exploit shell / a cron payload). The validator confirms the baseline is non-root, that the escalated channel returns uid=0 for a nonce'd probe (not a canned banner), AND that the escalated channel can read a root-only file (/etc/shadow by default) the baseline cannot — captured as the exit-code differential only, never the file content. You do not decide the verdict; a euid=0 with no working read differential does NOT pass.",
 		parameters: Type.Object({
 			finding_id: Type.Number({ description: "Candidate finding id from record_candidate" }),
-			baseline_exec: Type.String({ description: "Command template running {probe} as the current unprivileged user, e.g. \"sshpass -p www ssh www-data@10.0.0.5 {probe}\"" }),
-			escalated_exec: Type.String({ description: "Command template running {probe} through the escalation vector, e.g. \"sshpass -p www ssh www-data@10.0.0.5 sudo {probe}\"" }),
+			baseline_exec: Type.String({ description: "Command template running {probe} as the current unprivileged user. Insert {probe} UNQUOTED — the validator supplies its own quoting; wrapping it (e.g. '{probe}') collides and breaks the channel. e.g. \"sshpass -p www ssh www-data@10.0.0.5 {probe}\"" }),
+			escalated_exec: Type.String({ description: "Command template running {probe} through the escalation vector. Insert {probe} UNQUOTED (the validator quotes it itself). e.g. \"sshpass -p www ssh www-data@10.0.0.5 sudo {probe}\"" }),
 			root_only_path: Type.Optional(Type.String({ description: "Root-only file for the read differential (default /etc/shadow); only its readability is used" })),
 			timeout_ms: Type.Optional(Type.Number({ description: "Per-exec timeout in ms (default 15000)" })),
 		}),
