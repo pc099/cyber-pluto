@@ -31,7 +31,9 @@ import type {
 import { getEngagement, startEngagement } from "../state/engagement.js";
 import { stateDir } from "../state/db.js";
 import { FOOTHOLD_CLASSES } from "../validators/foothold-orchestration.js";
-import { checkHardCaps, checkTryBudget, DEFAULT_TRY_BUDGET, detectStuck, detectUnhealthy } from "./checks.js";
+import { checkHardCaps, checkTryBudget, classifyAttack, DEFAULT_TRY_BUDGET, detectStuck, detectUnhealthy } from "./checks.js";
+import { buildRunSummary } from "./run-summary.js";
+import type { Engagement } from "../state/engagement.js";
 
 const LOG = { dir: "logs", file: "lifecycle.jsonl" };
 
@@ -112,6 +114,41 @@ async function publishStatus(cwd: string, status: { contextTokensSeen: number; t
 	}
 }
 
+/** Deterministic run-summary telemetry (Decision 0006): a persisted,
+ * comparable record of how the run went (milestone reached, foothold/root,
+ * stop reason, counts, per-class attempts). Written to the state dir so the
+ * board reviews facts, not transcripts. Best-effort — never affects the run. */
+async function publishRunSummary(cwd: string, engagement: Engagement, stopReason: string, elapsed: number, tokens: number): Promise<void> {
+	try {
+		const tid = engagement.targetId;
+		const target = engagement.repos.targets.getById(tid);
+		const attemptsByClass: Record<string, number> = {};
+		for (const cmd of engagement.repos.attempts.allCommandsByTarget(tid)) {
+			const cls = classifyAttack(cmd);
+			if (cls) attemptsByClass[cls] = (attemptsByClass[cls] ?? 0) + 1;
+		}
+		const summary = buildRunSummary({
+			targetLabel: target?.label ?? "unknown",
+			host: target?.host ?? null,
+			stopReason,
+			counts: engagement.repos.findings.countByStatus(tid),
+			untrustedValidated: engagement.repos.findings.listUntrustedValidated(tid).length,
+			credsRecovered: engagement.repos.credentials.listByTarget(tid).length,
+			nodeCount: engagement.repos.nodes.countByTarget(tid),
+			attemptCount: engagement.repos.attempts.countByTarget(tid),
+			attemptsByClass,
+			hasFoothold: engagement.repos.findings.hasValidatedFootholdClass(tid, [...FOOTHOLD_CLASSES]),
+			hasRoot: engagement.repos.findings.hasValidatedFootholdClass(tid, ["privilege_escalation"]),
+			elapsedSeconds: Math.floor(elapsed),
+			contextTokensSeen: tokens,
+		});
+		await mkdir(stateDir(cwd), { recursive: true });
+		await writeFile(join(stateDir(cwd), "run-summary.json"), JSON.stringify(summary, null, 2), "utf8");
+	} catch {
+		// telemetry must never affect the engagement
+	}
+}
+
 async function logEvent(cwd: string, entry: Record<string, unknown>): Promise<void> {
 	try {
 		await mkdir(join(cwd, LOG.dir), { recursive: true });
@@ -169,12 +206,14 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		const toolCallCount = engagement.repos.attempts.countByTarget(engagement.targetId);
 		const elapsed = (Date.now() - state.sessionStart) / 1000; // active run time, not target age
 		await publishStatus(ctx.cwd, { contextTokensSeen: state.contextTokensSeen, toolCalls: toolCallCount, elapsed });
+		await publishRunSummary(ctx.cwd, engagement, "in_progress", elapsed, state.contextTokensSeen);
 		const caps = checkHardCaps(toolCallCount, elapsed, state.contextTokensSeen, {
 			maxToolCalls: cfg.maxToolCalls,
 			maxWallClockSeconds: cfg.maxWallClockSeconds,
 			maxTokens: cfg.maxTokens,
 		});
 		if (caps.stop) {
+			await publishRunSummary(ctx.cwd, engagement, `hard_cap:${caps.kind}`, elapsed, state.contextTokensSeen);
 			await logEvent(ctx.cwd, { kind: "hard_cap_stop", cap: caps.kind, reason: caps.reason, toolCallCount, elapsed });
 			console.error(`[pluto/lifecycle] ENGAGEMENT STOPPED — ${caps.reason}`);
 			ctx.shutdown();
@@ -195,6 +234,7 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 			// BLOCKS would spin on blocked calls until a cap force-stops it,
 			// burning budget doing nothing. In headless, a pause is terminal.
 			if (HEADLESS) {
+				await publishRunSummary(ctx.cwd, engagement, `headless_pause:${reason}`, (Date.now() - state.sessionStart) / 1000, state.contextTokensSeen);
 				await logEvent(ctx.cwd, { kind: "environmental_pause_stop", reason });
 				console.error(`[pluto/lifecycle] ENGAGEMENT STOPPED (headless) — ${reason}`);
 				ctx.shutdown();

@@ -15,6 +15,7 @@ import {
 	detectUnhealthy,
 	repeatCount,
 } from "./checks.js";
+import { buildRunSummary, milestoneRank } from "./run-summary.js";
 
 const CAPS = { maxToolCalls: 200, maxWallClockSeconds: 3600, maxTokens: 4_000_000 };
 
@@ -124,4 +125,38 @@ test("content discovery gets a high ceiling, not the tight brute ceiling", () =>
 	const prior = Array.from({ length: 10 }, (_, i) => `gobuster dir run ${i}`); // 10 fuzz attempts
 	// Well under web_fuzz budget (40) — still productive, not blocked.
 	assert.equal(checkTryBudget({ command: "gobuster dir -u http://x -w w.txt", priorCommands: prior, budget: DEFAULT_TRY_BUDGET, hasValidatedFoothold: false }).over, false);
+});
+
+// --- Run-summary telemetry: milestone derived from ledger facts -------------
+
+function baseSummaryInput() {
+	return {
+		targetLabel: "box", host: "10.0.0.5", stopReason: "in_progress",
+		counts: { candidate: 0, validated: 0, submitted: 0, rejected: 0 },
+		untrustedValidated: 0, credsRecovered: 0, nodeCount: 0, attemptCount: 0,
+		attemptsByClass: {}, hasFoothold: false, hasRoot: false,
+		elapsedSeconds: 0, contextTokensSeen: 0,
+	};
+}
+
+test("run-summary milestone is derived from proven facts, ascending", () => {
+	const started = buildRunSummary(baseSummaryInput());
+	assert.equal(started.reached, "started");
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), attemptCount: 2 }).reached, "recon");
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), attemptCount: 5, nodeCount: 6 }).reached, "surface_mapped");
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), counts: { candidate: 1, validated: 0, submitted: 0, rejected: 0 } }).reached, "candidate_found");
+	// A validated foothold OR recovered creds reaches "foothold".
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), hasFoothold: true }).reached, "foothold");
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), credsRecovered: 1 }).reached, "foothold");
+	// Root is the top milestone and dominates everything else.
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), hasRoot: true, hasFoothold: true, counts: { candidate: 3, validated: 2, submitted: 0, rejected: 1 } }).reached, "root");
+	assert.ok(milestoneRank("root") > milestoneRank("foothold"));
+	assert.ok(milestoneRank("foothold") > milestoneRank("candidate_found"));
+});
+
+test("run-summary discounts signature-failing validated findings", () => {
+	const s = buildRunSummary({ ...baseSummaryInput(), counts: { candidate: 0, validated: 3, submitted: 0, rejected: 0 }, untrustedValidated: 2 });
+	assert.equal(s.trustworthyValidated, 1, "2 of 3 validated fail Gate-1 signature");
+	assert.equal(s.schema, 1);
+	assert.equal(s.stopReason, "in_progress");
 });
