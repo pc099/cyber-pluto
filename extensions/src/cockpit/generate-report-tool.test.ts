@@ -31,6 +31,11 @@ cockpitExtension(fakePi);
 const dir = `/tmp/pluto-genreport-${process.pid}-${Date.now()}`;
 process.env["PLUTO_STATE_DIR"] = `${dir}/state`;
 process.env["PLUTO_TARGET_LABEL"] = "genreport";
+// This suite tests the LEDGER-STATUS gate with signature enforcement OFF
+// (covered separately). Pin the verifier path to a nonexistent file so the test
+// is hermetic — it must not depend on whether a promotion pubkey happens to
+// exist on the host at the default /etc/cyber-pluto path.
+process.env["PLUTO_PROMOTION_PUBKEY"] = `${dir}/no-such-pubkey.pub`;
 const e = startEngagement(dir); // sets the module singleton the tools read
 
 async function run(name: string, params: Record<string, unknown>) {

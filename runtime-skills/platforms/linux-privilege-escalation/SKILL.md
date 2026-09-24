@@ -14,6 +14,21 @@ You have execution as an unprivileged user. Your job now is **root** — do not 
 at the foothold. Work this in order; enumerate FIRST, then exploit the
 highest-signal vector. When one vector dead-ends, PIVOT — do not grind it.
 
+## 0. Your shell is probably NON-INTERACTIVE — do NOT chase a TTY first
+
+A web RCE / command-injection foothold gives **non-interactive** command execution.
+The rookie trap (and a real Pluto failure: 30 minutes burned, root never reached)
+is to spend your budget trying to upgrade to an interactive shell — reverse
+shells, `pty.fork()` tricks, forcing `su` to accept a password — BEFORE doing any
+enumeration. **Root does not require a TTY, and almost none of the vectors below
+do.** pkexec/PwnKit, SUID/GTFOBins, writable cron, capability abuse, reading
+root-readable files, and version→CVE exploits ALL run fine over a one-shot
+non-interactive channel. The ONLY thing that needs a PTY is interactive `su` /
+some GTFOBins escapes — so solving the TTY is a **last-resort sub-problem** you
+tackle only *after* the TTY-free ladder is exhausted and you've picked a vector
+that genuinely needs it. If you catch yourself mutating the same shell-upgrade
+technique with no new finding, STOP and run §1–§2.
+
 ## 1. Enumerate automatically FIRST (don't hand-roll)
 
 Upload and run a real enum script; triage its RED/HIGH findings before anything
@@ -25,15 +40,28 @@ else. These are provisioned locally at `/opt/privesc/`:
 - **pspy**: `/opt/privesc/pspy64` — watch for **root cron / scheduled commands**
   running world-writable scripts (no root needed to watch).
 
-## 2. Work the vectors in impact order
+## 2. Work the vectors in impact order (all TTY-free unless noted)
 
+0. **Credential you already recovered — check this FIRST.** If you have a
+   *validated* password (from a config/`.bak`/DB), its value is highest-signal:
+   (a) does that user have sudo rights (`sudo -S -l` reading the password from
+   stdin — no TTY needed), (b) does it unlock another account, (c) is it the
+   root/DB password reused? A hint the user has escalated before:
+   **`~/.sudo_as_admin_successful`** in their home dir means they've run `sudo`
+   successfully — check their sudo entitlement immediately.
 1. **sudo -l** — NOPASSWD entries → **GTFOBins** (`sudo <bin>` escape to root).
+   With a password use `echo '<pw>' | sudo -S -l` (stdin, no TTY).
 2. **SUID/SGID**: `find / -perm -4000 -o -perm -2000 2>/dev/null` → GTFOBins for
    each unusual binary.
-3. **Kernel exploit** — `uname -a`; match the version to a known local-root:
-   - **5.8–5.16 → Dirty Pipe (CVE-2022-0847)** — the go-to for these kernels.
-   - pkexec present → **PwnKit (CVE-2021-4034)**.
-   - older → DirtyCow (CVE-2016-5195).
+3. **Kernel / local-root CVE — match what you ALREADY gathered, then run it.**
+   You have `uname -a` and package versions in hand; the matching step is
+   mandatory, not optional. Map:
+   - **`pkexec` present (polkit ≤ 0.105–0.120) → PwnKit (CVE-2021-4034)** — the
+     go-to on almost any Ubuntu/Debian incl. **kernel 3.x and 4.x**; check
+     `pkexec --version` / `ls -l $(which pkexec)`. Runs non-interactively.
+   - **kernel 5.8–5.16 → Dirty Pipe (CVE-2022-0847)**.
+   - **kernel ≤ 4.8 (older 2.x–4.x) → DirtyCow (CVE-2016-5195)**; also check
+     `overlayfs` local-roots on Ubuntu 16.04-era kernels.
    Compile ON the target when glibc versions differ (a locally-built binary often
    fails with `GLIBC_2.xx not found` — build in the target's environment).
 4. **Cron abuse**: a root cron running a **world-writable** script or `chown`/
@@ -43,8 +71,6 @@ else. These are provisioned locally at `/opt/privesc/`:
    `/etc/cron.d`, `/etc/sudoers.d`, service configs, **group membership**
    (`/etc/group`).
 6. **Capabilities**: `getcap -r / 2>/dev/null` (`cap_setuid+ep` → root).
-7. **Credential reuse**: try any recovered password against `su <user>` and ssh;
-   grep configs / history / `.bak` / backups for plaintext creds.
 
 ## 3. Make root a Gate-1 FACT (don't just claim it)
 

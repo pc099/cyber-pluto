@@ -189,3 +189,61 @@ export function detectStuck(input: StuckInput): StuckVerdict {
 	}
 	return { stuck: false };
 }
+
+/**
+ * No-PROGRESS detection (board fix, Jangow run). `detectStuck` keys on command
+ * SHAPE (repeats / low variation), so it is blind to the failure that actually
+ * happened: the agent fired a stream of NOVEL commands (fresh pty.fork scripts)
+ * that produced no new ledger fact — 30 minutes of motion, zero progress, and
+ * every shape-based guard read it as fine.
+ *
+ * This is the fact-based backstop: a "progress fingerprint" of the LEDGER (how
+ * far we've reached + how many candidates/validated/creds/root exist). When the
+ * fingerprint does not change across a window of tool calls, the agent is busy
+ * but not advancing — nudge it to the untried checklist, escalate if it
+ * persists. It is orthogonal to detectStuck (which needs low command variation)
+ * and fires precisely on novel-activity-without-a-new-fact.
+ */
+export interface ProgressFingerprint {
+	/** milestoneRank(reached) — recon < surface < candidate < foothold < root. */
+	milestone: number;
+	candidates: number;
+	validated: number;
+	creds: number;
+	/** 1 once a privilege_escalation finding is validated, else 0. */
+	rootValidated: number;
+}
+
+export function sameProgress(a: ProgressFingerprint, b: ProgressFingerprint): boolean {
+	return a.milestone === b.milestone && a.candidates === b.candidates && a.validated === b.validated && a.creds === b.creds && a.rootValidated === b.rootValidated;
+}
+
+export interface NoProgressState {
+	last: ProgressFingerprint | null;
+	/** Tool calls observed since the fingerprint last CHANGED. */
+	callsSinceChange: number;
+}
+
+export const INITIAL_NO_PROGRESS_STATE: NoProgressState = { last: null, callsSinceChange: 0 };
+
+/** Fold a new observation into the state: reset the counter on any change,
+ * otherwise increment. Pure — the hook holds the state across calls. */
+export function updateNoProgress(state: NoProgressState, current: ProgressFingerprint): NoProgressState {
+	if (state.last === null || !sameProgress(state.last, current)) {
+		return { last: current, callsSinceChange: 0 };
+	}
+	return { last: state.last, callsSinceChange: state.callsSinceChange + 1 };
+}
+
+export type NoProgressVerdict = { stalled: false } | { stalled: true; calls: number; reason: string };
+
+/** Stalled when the fingerprint has been unchanged for `window` consecutive
+ * calls. `window` is generous (a legit linpeas + sudo -l + SUID sweep is well
+ * under it and, more importantly, each of those produces a new node/fact that
+ * resets the counter). */
+export function noProgressStalled(state: NoProgressState, window: number): NoProgressVerdict {
+	if (state.callsSinceChange >= window) {
+		return { stalled: true, calls: state.callsSinceChange, reason: `no new finding, credential, validated status, or phase advance in ${state.callsSinceChange} tool calls` };
+	}
+	return { stalled: false };
+}

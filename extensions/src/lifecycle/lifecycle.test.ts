@@ -13,7 +13,12 @@ import {
 	DEFAULT_TRY_BUDGET,
 	detectStuck,
 	detectUnhealthy,
+	INITIAL_NO_PROGRESS_STATE,
+	noProgressStalled,
+	type ProgressFingerprint,
 	repeatCount,
+	sameProgress,
+	updateNoProgress,
 } from "./checks.js";
 import { buildRunSummary, milestoneRank } from "./run-summary.js";
 
@@ -172,4 +177,40 @@ test("run-summary calls unsigned validated UNVERIFIABLE, never trustworthy (enfo
 	assert.equal(s.trustworthyValidated, 0, "nothing is trustworthy without a verifier");
 	assert.equal(s.unverifiableValidated, 1, "the validated finding is unverifiable, not trusted");
 	assert.equal(s.untrustedValidatedCount, 0);
+});
+
+// --- No-progress detection: activity without a new ledger fact --------------
+
+function fp(over: Partial<ProgressFingerprint> = {}): ProgressFingerprint {
+	return { milestone: 1, candidates: 0, validated: 1, creds: 1, rootValidated: 0, ...over };
+}
+
+test("no-progress fires after a window of NOVEL activity with no new fact", () => {
+	let st = INITIAL_NO_PROGRESS_STATE;
+	const stable = fp();
+	// One call establishes the fingerprint, then 20 identical calls (the pty-thrash
+	// shape: novel commands, no new fact) accumulate the counter to 20.
+	for (let i = 0; i < 21; i++) st = updateNoProgress(st, stable);
+	assert.equal(st.callsSinceChange, 20);
+	assert.equal(noProgressStalled(st, 20).stalled, true, "unchanged for the window → stalled");
+	assert.equal(noProgressStalled(st, 25).stalled, false, "not yet at the larger window");
+});
+
+test("any new ledger fact resets the no-progress counter (no false fire on real work)", () => {
+	let st = INITIAL_NO_PROGRESS_STATE;
+	for (let i = 0; i < 15; i++) st = updateNoProgress(st, fp());
+	// A new credential appears (real progress) — counter resets.
+	st = updateNoProgress(st, fp({ creds: 2 }));
+	assert.equal(st.callsSinceChange, 0, "a changed fingerprint resets the counter");
+	assert.equal(noProgressStalled(st, 20).stalled, false);
+	// A validated finding, then reaching root — each resets too.
+	for (let i = 0; i < 19; i++) st = updateNoProgress(st, fp({ creds: 2 }));
+	st = updateNoProgress(st, fp({ creds: 2, rootValidated: 1, milestone: 2 }));
+	assert.equal(noProgressStalled(st, 20).stalled, false, "reaching root is progress, not a stall");
+});
+
+test("sameProgress compares all fact dimensions", () => {
+	assert.ok(sameProgress(fp(), fp()));
+	assert.ok(!sameProgress(fp(), fp({ candidates: 1 })));
+	assert.ok(!sameProgress(fp(), fp({ rootValidated: 1 })));
 });

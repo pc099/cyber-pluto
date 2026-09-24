@@ -29,6 +29,7 @@ import type {
 import { Type } from "typebox";
 import { stateDir } from "../state/db.js";
 import { type Engagement, getEngagement, startEngagement } from "../state/engagement.js";
+import { isJunkEvidence, junkEvidenceReason } from "../shared/evidence-integrity.js";
 import { IllegalStatusTransition } from "../state/findings-repo.js";
 import type { FindingRow, NodeRow } from "../state/types.js";
 import { buildFindingReport } from "./report.js";
@@ -362,6 +363,15 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 		async execute(_id, params, _s, _u, ctx) {
 			const e = eng();
 			if (!e) return { content: [{ type: "text", text: "No engagement DB open." }], details: {} };
+			// Evidence-integrity guard (board fix): refuse a junk secret — the hash of
+			// an empty/missing file (e.g. md5("")=d41d8cd…) or a placeholder — so a
+			// non-capture can never be recorded as a credential/flag.
+			if (params.secret && isJunkEvidence(params.secret)) {
+				return {
+					content: [{ type: "text", text: `NOT recorded: '${params.secret}' is junk evidence (${junkEvidenceReason(params.secret)}). If you md5'd a file, it was empty/missing — that is not a capture. Recover the real value first.` }],
+					details: { rejected: true, reason: junkEvidenceReason(params.secret) },
+				};
+			}
 			const allowed = ["password", "hash", "key", "token"];
 			const st = params.secret_type && allowed.includes(params.secret_type) ? (params.secret_type as "password" | "hash" | "key" | "token") : null;
 			const row = e.repos.credentials.create({

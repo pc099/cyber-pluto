@@ -31,7 +31,18 @@ import type {
 import { getEngagement, startEngagement } from "../state/engagement.js";
 import { stateDir } from "../state/db.js";
 import { FOOTHOLD_CLASSES } from "../validators/foothold-orchestration.js";
-import { checkHardCaps, checkTryBudget, classifyAttack, DEFAULT_TRY_BUDGET, detectStuck, detectUnhealthy } from "./checks.js";
+import {
+	checkHardCaps,
+	checkTryBudget,
+	classifyAttack,
+	DEFAULT_TRY_BUDGET,
+	detectStuck,
+	detectUnhealthy,
+	INITIAL_NO_PROGRESS_STATE,
+	noProgressStalled,
+	type ProgressFingerprint,
+	updateNoProgress,
+} from "./checks.js";
 import { buildRunSummary } from "./run-summary.js";
 import { resolveVerifier } from "../state/promotion-verifier.js";
 import type { Engagement } from "../state/engagement.js";
@@ -57,7 +68,14 @@ function capNum(env: string, dflt: number): number {
 function config() {
 	return {
 		maxToolCalls: capNum("PLUTO_MAX_TOOL_CALLS", 200),
-		maxWallClockSeconds: capNum("PLUTO_MAX_WALLCLOCK_S", 3600),
+		// 3600s proved too tight for a full foothold→root box (the Jangow run
+		// capped mid-privesc). 5400s (90 min) is a more realistic default; still a
+		// ceiling, still overridable, still 0/unlimited to disable. NOTE: the cap is
+		// sampled at each tool_call, so a single DETACHED/hung command (e.g. a
+		// reverse-shell listener that outlives its declared timeout) can still
+		// overrun it between checks — a proper per-command hard-kill lives in Pi's
+		// exec layer and is a tracked follow-on, not fixed here.
+		maxWallClockSeconds: capNum("PLUTO_MAX_WALLCLOCK_S", 5400),
 		// Cost is the real constraint on a metered provider. Cap estimated
 		// cumulative tokens (default 4M — well above a normal box, well below the
 		// 24M runaway). 0/unlimited disables it like the other caps.
@@ -65,6 +83,11 @@ function config() {
 		stuckRepeatThreshold: num("PLUTO_STUCK_REPEAT", 3),
 		stuckWindow: num("PLUTO_STUCK_WINDOW", 8),
 		stuckEscalateAfter: num("PLUTO_STUCK_ESCALATE", 2),
+		// No-PROGRESS window: tool calls with no new ledger fact before a pivot
+		// nudge. Generous — a real enumeration ladder (linpeas, sudo -l, SUID)
+		// produces new nodes/facts well within it. The Jangow thrash was ~25+.
+		noProgressWindow: num("PLUTO_NOPROGRESS_WINDOW", 20),
+		noProgressEscalateAfter: num("PLUTO_NOPROGRESS_ESCALATE", 2),
 		// Require several CONSECUTIVE unhealthy target responses before pausing,
 		// so a single expected blip (one 'connection refused' while testing, a
 		// skill file that mentions 'captcha') never pauses the whole engagement.
@@ -83,6 +106,8 @@ function pausePath(cwd: string): string {
 const state = {
 	unhealthyHits: 0,
 	stuckHits: 0,
+	noProgress: INITIAL_NO_PROGRESS_STATE,
+	noProgressHits: 0,
 	nodeCountHistory: [] as number[],
 	// Active wall-clock is measured from process start, NOT targets.created_at:
 	// with per-engagement DBs a target persists across resumes, so created_at
@@ -310,6 +335,38 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 			const guidance = escalate
 				? `Stuck persists after an untried KB/skill lookup — escalating to Chaitanya (§10.5). ${stuck.reason}.`
 				: `Stuck detected (${stuck.reason}). Before repeating, consult the knowledge base or a runtime skill for an angle you have NOT yet tried on this line of attack, or try a genuinely different technique (a bypass/evasion counts as progress). This call is blocked to break the loop.`;
+			return { block: true, reason: guidance };
+		}
+
+		// 5. No-PROGRESS detection — the fact-based backstop (Jangow fix). Unlike
+		// stuck-detection (command shape), this fires when a stream of NOVEL calls
+		// produces no new ledger fact: the 30-minute pty-thrash that never ran the
+		// privesc ladder. Fingerprint = the progress facts; a coarse phase (root/
+		// foothold/pre-foothold) is computed WITHOUT node/attempt counts so ordinary
+		// recon churn doesn't mask a real stall.
+		const cStatus = engagement.repos.findings.countByStatus(engagement.targetId);
+		const hasRoot = engagement.repos.findings.hasValidatedFootholdClass(engagement.targetId, ["privilege_escalation"]);
+		const hasFoothold = engagement.repos.findings.hasValidatedFootholdClass(engagement.targetId, [...FOOTHOLD_CLASSES]);
+		const credCount = engagement.repos.credentials.listByTarget(engagement.targetId).length;
+		const fingerprint: ProgressFingerprint = {
+			milestone: hasRoot ? 2 : hasFoothold || credCount > 0 ? 1 : 0,
+			candidates: cStatus.candidate,
+			validated: cStatus.validated,
+			creds: credCount,
+			rootValidated: hasRoot ? 1 : 0,
+		};
+		state.noProgress = updateNoProgress(state.noProgress, fingerprint);
+		const noProg = noProgressStalled(state.noProgress, cfg.noProgressWindow);
+		if (noProg.stalled) {
+			state.noProgressHits += 1;
+			// Reset the counter so we re-accumulate a full window before nudging
+			// again (never block every subsequent call).
+			state.noProgress = { last: state.noProgress.last, callsSinceChange: 0 };
+			const escalate = state.noProgressHits >= cfg.noProgressEscalateAfter;
+			await logEvent(ctx.cwd, { kind: escalate ? "no_progress_escalate" : "no_progress_nudge", reason: noProg.reason, hits: state.noProgressHits, fingerprint });
+			const guidance = escalate
+				? `No measurable progress persists (${noProg.reason}) — escalating to Chaitanya (§10.5). Stop the current line and report what you have; a human should pick the next move.`
+				: `NO PROGRESS: ${noProg.reason}. You are producing activity but no new finding, credential, or validated status. STOP the current line of attack and pivot to an UNTRIED vector from the checklist — for privilege escalation run the enumeration ladder FIRST (sudo -l, SUID/getcap, kernel/pkexec → known-CVE match) before any more shell/TTY-upgrade attempts; do NOT keep mutating the same technique. This call is blocked to force the pivot.`;
 			return { block: true, reason: guidance };
 		}
 
