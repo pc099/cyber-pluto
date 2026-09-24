@@ -46,7 +46,20 @@ else. These are provisioned locally at `/opt/privesc/`:
 7. **Credential reuse**: try any recovered password against `su <user>` and ssh;
    grep configs / history / `.bak` / backups for plaintext creds.
 
-## 3. Prove, then STOP and CLEAN UP
+## 3. Make root a Gate-1 FACT (don't just claim it)
+
+A transcript that says "I got root" is not a validated finding — root is only a
+ledger fact once the deterministic validator reproduces it. The moment you have
+an escalation channel, record the candidate and run **`validate_privilege_escalation`**:
+give it two command templates, each containing the literal `{probe}` placeholder
+— `baseline_exec` runs a probe as your CURRENT unprivileged user, `escalated_exec`
+runs it THROUGH your vector (e.g. `... sudo {probe}`, `/tmp/rootbash -p -c {probe}`).
+It confirms baseline is non-root, that the escalated channel returns `uid=0` for a
+nonce'd probe, AND that it can read a root-only file (`/etc/shadow`) the baseline
+cannot — as an exit-code differential, never the content. A faked `uid=0` banner
+that cannot actually read shadow will NOT pass, by design; don't try to game it.
+
+## 4. Prove, then STOP and CLEAN UP
 
 Prove root minimally (`id` showing `euid=0`, read the root flag) — do NOT deploy
 persistence. Then **reverse everything you changed**: remove any SUID bit you set

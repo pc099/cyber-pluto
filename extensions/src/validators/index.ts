@@ -24,6 +24,7 @@ import { validateFileWriteRce } from "./file-write-rce.js";
 import { type GateReport, recordAndGate } from "./gate.js";
 import { validateIdor } from "./idor.js";
 import { validatePathTraversal } from "./path-traversal.js";
+import { validatePrivilegeEscalation } from "./privilege-escalation.js";
 import { validateSqli } from "./sqli.js";
 import { validateXss } from "./xss.js";
 
@@ -210,6 +211,34 @@ export default function validatorsExtension(pi: ExtensionAPI): void {
 					/* the alert is also in the tool result + evidence below */
 				}
 			}
+			return recordAndGate(ctx.cwd, loaded.engagement, params.finding_id, report);
+		},
+	});
+
+	// Privilege escalation makes ROOT a Gate-1 fact (before this it was only log
+	// evidence). It takes two execution-channel TEMPLATES — unprivileged and
+	// escalated — not the web-injection param shape, so it registers on its own.
+	pi.registerTool({
+		name: "validate_privilege_escalation",
+		label: "Validate Privilege Escalation → root (Gate 1)",
+		description:
+			"Deterministic Gate 1 validator that root was actually achieved — so an escalation becomes a `validated` ledger fact, not just a transcript claim. You provide two shell-command TEMPLATES, each containing the literal {probe} placeholder: baseline_exec runs a probe as the CURRENT unprivileged user, escalated_exec runs it THROUGH your escalation vector (sudo / a planted SUID bash / a kernel-exploit shell / a cron payload). The validator confirms the baseline is non-root, that the escalated channel returns uid=0 for a nonce'd probe (not a canned banner), AND that the escalated channel can read a root-only file (/etc/shadow by default) the baseline cannot — captured as the exit-code differential only, never the file content. You do not decide the verdict; a euid=0 with no working read differential does NOT pass.",
+		parameters: Type.Object({
+			finding_id: Type.Number({ description: "Candidate finding id from record_candidate" }),
+			baseline_exec: Type.String({ description: "Command template running {probe} as the current unprivileged user, e.g. \"sshpass -p www ssh www-data@10.0.0.5 {probe}\"" }),
+			escalated_exec: Type.String({ description: "Command template running {probe} through the escalation vector, e.g. \"sshpass -p www ssh www-data@10.0.0.5 sudo {probe}\"" }),
+			root_only_path: Type.Optional(Type.String({ description: "Root-only file for the read differential (default /etc/shadow); only its readability is used" })),
+			timeout_ms: Type.Optional(Type.Number({ description: "Per-exec timeout in ms (default 15000)" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx): Promise<AgentToolResult<unknown>> {
+			const loaded = loadFinding(params.finding_id);
+			if (isResult(loaded)) return loaded;
+			const report = await validatePrivilegeEscalation({
+				baselineExecTemplate: params.baseline_exec,
+				escalatedExecTemplate: params.escalated_exec,
+				rootOnlyReadPath: params.root_only_path,
+				timeoutMs: params.timeout_ms,
+			});
 			return recordAndGate(ctx.cwd, loaded.engagement, params.finding_id, report);
 		},
 	});
