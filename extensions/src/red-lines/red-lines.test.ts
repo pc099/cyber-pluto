@@ -158,13 +158,48 @@ test("the destructive red-line is EFFECT-based — rewording rm -f does not evad
 	}
 });
 
-test("benign removal of a relative scratch file in the cwd is not red-lined", () => {
+test("benign scratch-file cleanup is not red-lined (relative OR /tmp)", () => {
 	// Effect-based ≠ block-everything: a validator cleaning up its own artifact
-	// in the working dir (not a root/home/system path) must stay unblocked, or
-	// the harness can't clean up after itself without a human in the loop.
-	for (const cmd of ["rm -f ./exploit.tmp", "rm -f scratch.txt", "unlink ./payload.php"]) {
+	// in the working dir or /tmp (not a root/home/system path) must stay
+	// unblocked, or the harness can't clean up after itself without a human in
+	// the loop. The /tmp cases are the exact Empire:Breakout false positives.
+	for (const cmd of [
+		"rm -f ./exploit.tmp",
+		"rm -f scratch.txt",
+		"unlink ./payload.php",
+		"rm -f /tmp/webmin_cj", // ← the cookie-jar cleanup that was wrongly blocked
+		"rm -f /tmp/nmap_out.txt",
+		"rm -rf /tmp/pluto_work", // recursive cleanup of OUR OWN scratch dir is fine
+		"rm -rf /var/tmp/scratch",
+		"rm -f *.tmp", // a non-absolute cwd glob is not a system-wide wipe
+	]) {
 		assert.equal(checkRedLines(bash(cmd), ctx).allowed, true, `should be allowed: ${cmd}`);
 	}
+});
+
+test("removal of a SENSITIVE system path still fires, even a single named file", () => {
+	// The narrowing must not open a hole: deleting a real system file is still
+	// destructive whether or not it is recursive or a wildcard.
+	for (const cmd of ["rm -f /etc/passwd", "rm /boot/vmlinuz", "unlink /etc/group", "rm -f /var/www/html/index.php"]) {
+		const d = checkRedLines(bash(cmd), ctx);
+		assert.equal(d.allowed, false, `must be blocked: ${cmd}`);
+		if (!d.allowed) assert.equal(d.category, "destructive_or_irreversible", `category for: ${cmd}`);
+	}
+});
+
+test("port 20000 (Webmin/Usermin) is NOT flagged as an OT/safety-of-life target", () => {
+	// Regression: 20000 is Usermin's standard port; flagging it as DNP3 blocked
+	// the entire Empire:Breakout critical path with no way to approve past it.
+	// In-scope host, so this isolates the safety-of-life signal from the scope rule.
+	for (const cmd of [
+		"nmap -Pn -sV -sC -p20000 10.0.0.5",
+		"curl -sk -i https://10.0.0.5:20000/",
+	]) {
+		assert.equal(checkRedLines(bash(cmd), ctx).allowed, true, `should be allowed: ${cmd}`);
+	}
+	// A genuine DNP3/OT tool or a truly OT port is still blocked.
+	assert.equal(checkRedLines(bash("modbus-cli read 10.0.0.5"), ctx).allowed, false);
+	assert.equal(checkRedLines(bash("nmap -p502 10.0.0.5"), ctx).allowed, false);
 });
 
 test("host extraction and scope normalization", () => {

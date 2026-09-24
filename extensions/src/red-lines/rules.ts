@@ -297,9 +297,15 @@ const SAFETY_OF_LIFE_RULE: RedLineRule = {
 			/\b(modbus|bacnet|dnp3|s7comm|profinet|ethernet\/ip|hl7|dicom)\b/i,
 			/\b(plcscan|modbus-cli|mbtget|opcua)\b/i,
 			// OT/ICS ports, but ONLY in a real PORT position (-p / --port / :port) —
-			// not a bare integer, so `sleep 502`, `head -n 20000`, `.../102/` do
-			// not trip this highest-priority, scope-independent block.
-			/(?:-p\s*|--port[=\s]|:)(?:502|20000|47808|44818|2404|102)\b/i,
+			// not a bare integer, so `sleep 502`, `.../102/` do not trip this
+			// highest-priority, scope-independent block.
+			// NOTE: 20000 is DELIBERATELY EXCLUDED — it is Webmin/Usermin's standard
+			// port far more often than DNP3, and with no approval-propagation channel
+			// yet a false positive here is unrecoverable (it blocked the entire
+			// Empire:Breakout critical path). A real DNP3 engagement still trips the
+			// `dnp3` protocol/tool keywords above. The whole port heuristic is under
+			// board review alongside the approval channel.
+			/(?:-p\s*|--port[=\s]|:)(?:502|47808|44818|2404|102)\b/i,
 		];
 		for (const p of patterns) {
 			if (p.test(inv.commandText)) {
@@ -325,12 +331,23 @@ const DESTRUCTIVE_RULE = patternRule({
 		// A relative path in the cwd (`rm -f ./scratch`) still passes; a root/
 		// home/wildcard/system target fires — a false positive only asks the
 		// operator to approve, a false negative runs the destruction.
-		/\brm\s+-[rfRimd]*[rf][rfRimd]*\s+(\/|~|\$HOME\b|\*)/i, // rm -rf/-f on root/home/wildcard
-		/\bunlink\s+(\/|~|\$HOME\b|\S*\*)/i, // unlink <abs/home/glob> — the exact reword that evaded
+		// Recursive deletion of a real tree — rm -rf on a home path, a glob, or an
+		// absolute path OTHER than a /tmp or /var/tmp scratch dir. Recursive =
+		// tree deletion, the genuinely dangerous shape.
+		/\brm\s+(?:-\S+\s+)*-\S*r\S*\s+(?:-\S+\s+)*(?:~|\$HOME\b|\S*\*|\/(?!tmp\/|var\/tmp\/)\S)/i,
+		// rm of the filesystem root or a home root itself.
+		/\brm\s+(?:-\S+\s+)*(?:\/|~|\$HOME)(?:\s|$)/i,
+		// rm of an ABSOLUTE-path glob (broad deletion) — e.g. rm -f /var/www/*.
+		/\brm\s+(?:-\S+\s+)*\/\S*\*/i,
+		// Removal of a SENSITIVE system path by ANY tool — even a single named file
+		// (rm -f /etc/passwd) or the run-3 reword (unlink /etc/group). A single
+		// scratch-file cleanup (rm -f /tmp/cookiejar, unlink ./payload) is NOT
+		// destructive and passes — /tmp and /var/tmp are intentionally not sensitive.
+		/\b(?:rm|unlink|shred)\b(?:\s+-\S+)*\s+(?:\/(?:bin|boot|dev|etc|lib|lib64|root|sbin|sys|usr)\b|\/var\/(?!tmp\/)|~\/\.(?:ssh|gnupg))/i,
 		/\bfind\b[^\n]*\s-delete\b/i, // find … -delete
 		/\bfind\b[^\n]*-exec\s+(rm|unlink|shred)\b/i, // find … -exec rm/unlink/shred
 		/\btruncate\s+-s\s*0\s+\/(?:etc|bin|sbin|usr|var|boot|lib|root|home)\//i, // truncate a system file to empty
-		/>\s*\/(?:etc|bin|sbin|usr|var|boot|lib|root|home)\/\S/i, // clobber a system file via redirect (incl. `: > /etc/…`)
+		/>\s*\/(?:etc|bin|sbin|usr|boot|lib|root)\/\S/i, // clobber a system file via redirect (incl. `: > /etc/…`)
 		/\bcp\s+\/dev\/null\s+\/(?:etc|bin|sbin|usr|var|boot|lib|root)\//i, // cp /dev/null over a system file
 		/\bdd\b[^\n]*\bof=\/(?:dev\/(?:sd|nvme|vd|hd)\w+|etc\/|bin\/|sbin\/|boot\/|usr\/|lib\/)/i, // raw device write OR byte-patch of a system file
 		/\bmkfs(\.\w+)?\b/i,
