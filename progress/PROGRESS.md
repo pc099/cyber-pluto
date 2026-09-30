@@ -4,7 +4,7 @@
 
 ## Current position
 - **Phase:** POST-PLAN — the 12-session build plan is COMPLETE; now building the operator harness interface (Camp-1, CAI-style) for heavy daily use.
-- **Active work:** Post-plan harness hardening. Last Jangow Pi session reviewed by the four-role board; observed root succeeds, resume attribution and signed trust fail. See Decision 0007 and `progress/CODEX_HANDOFF.md`.
+- **Active work:** Research-led post-plan hardening (2026-09-30): reusable web researcher created and investigating current engineering approaches against Decision 0007. Board review and approved implementation follow the research. No new target run is authorized by this engineering task.
 - **Status:** The harness is operable end to end via `./cyberpluto`. Build plan done; Session 12 proven on a Cap-shaped local box (real HTB Cap deferred — free VPN filters this datacenter IP).
 - **Next concrete action (Decision 0007, September 30):** Bind resumes to the correct engagement/run metadata and make outcomes consistently trust/current-status aware. The latest Pi session reached observed root under shared `ad-hoc`/loopback state with an unsigned promotion, leaving named Jangow at foothold/hard-cap. Reconcile sandbox readiness (including the pending `/root` workspace/startup fix) before claiming trusted completion. Provider-block lifecycle, typed scope amendments, terminal telemetry and cleanup debt follow. Older HTB/VPN and pre-sandbox backlog notes below are historical; consult current decisions and code.
 

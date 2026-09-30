@@ -19,5 +19,9 @@ or requested board review. Its four role files are in `.codex/agents/`.
 Pass their instructions to delegated agents if native role selection is
 unavailable. Do not claim previous agents' live contexts have been recreated.
 
+For current engineering research and research-led fixes, use
+`pluto-harness-research/SKILL.md` and `.codex/agents/pluto-harness-researcher.toml`.
+The researcher uses inherited web tools and advises the existing four-role board.
+
 This is project engineering context. Keep Pluto's target-testing runtime skills
 separate, and report historical test results separately from checks run now.

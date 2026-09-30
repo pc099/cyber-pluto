@@ -52,6 +52,11 @@ Custom role files are in `.codex/agents/`. If this session cannot select those
 files natively, read their instructions and pass them to delegated agents.
 Leave models, permissions and concurrency inherited from the active environment.
 
+For requested research-led harness work, use `pluto-harness-researcher` and
+`.agents/skills/pluto-harness-research/SKILL.md`. The researcher has inherited web
+tools, grounds proposals in primary sources and Pluto evidence, and advises the
+four-role board; it does not replace a board vote or grant extra permissions.
+
 ## Current next task
 
 The latest Claude handoff identifies sandbox startup failure under `/root` as
