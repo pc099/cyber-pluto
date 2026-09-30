@@ -57,6 +57,15 @@ been rejected or blocked.
 
 ## Next steps for the harness
 
+**Update, 2026-09-30:** The operator supplied a later Pi trace,
+`01a0d800-700c-74a0-ad83-4413dd373f75`. The board review in
+`docs/decisions/0007-last-jangow-run-review.md` establishes observed September 27
+root reproduction, but its promotion is unsigned and attributed to default
+`ad-hoc`/loopback state. Named Jangow remains foothold/hard-cap stopped. The
+priorities are now engagement/run binding and consistent trust/current-status
+predicates, with sandbox readiness/startup still open. The steps below preserve
+the earlier Claude handoff; use Decision 0007 for the current ordered backlog.
+
 1. Reproduce and map sandbox startup locally without an LLM or target engagement.
    Bring a concrete workspace/state/socket migration proposal to the four-role
    board. Preserve confinement and signing behavior throughout the design.
