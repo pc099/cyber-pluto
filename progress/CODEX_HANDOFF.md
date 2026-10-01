@@ -57,6 +57,12 @@ been rejected or blocked.
 
 ## Next steps for the harness
 
+**Lab update, 2026-10-01:** The operator-selected ICA1 VM is installed and running
+on dedicated host-only `pluto-lab` at verified DHCP address `192.168.123.10`; HTTP
+returns 200. Jangow definition/images were removed as requested, with historical
+engagement/session records preserved. See `progress/ICA1_LAB.md`. No Pluto box
+test has started; sandbox startup/signing readiness remains the next check.
+
 **Update, 2026-10-01:** The operator's research-led task is complete for the three
 board-approved reliability slices. See Decision 0008 and the dated research memo.
 Strict verified-current predicates, post-UI transactional approvals, explicit
