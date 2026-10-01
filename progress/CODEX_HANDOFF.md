@@ -69,9 +69,10 @@ Strict verified-current predicates, post-UI transactional approvals, explicit
 session associations, guarded bootstrap, delegate inheritance, durable provider
 holds/recovery and generic Pi cancellation are implemented. Final extension suite
 184/184, actual SDK integration 8/8, Pi focused 9/9 + affected 60/60, build/check
-all passed. No live target or provider call occurred. Pi changes remain locally
-uncommitted under its nested instruction; the parent tracks their exact patch and
-fresh-checkout application/build instructions in `patches/pi/README.md`.
+all passed. No live target or provider call occurred. The operator subsequently
+authorized committing all pending changes on 2026-10-01; the parent submodule
+reference now includes the Pi cancellation fix and nine-case test suite. The
+portable patch remains available for the earlier Pi base in `patches/pi/README.md`.
 
 Remaining next work is a board-reviewed sandbox startup/workspace proposal and
 local confinement/failure checks, followed by independent validation authority

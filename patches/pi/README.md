@@ -2,9 +2,10 @@
 
 Base Pi revision: `b215884021491772a1eb7a9f92c6653a2a52a69d`.
 
-The parent repository tracks this patch because Pi's local instructions require
-explicit operator authorization for a Pi commit. The working checkout and built
-runtime already contain it. Fresh checkouts can run:
+The operator authorized committing the Pi changes on 2026-10-01. The parent
+repository's submodule reference now includes the cancellation fix and its test
+suite. This patch remains available for checkouts at the base revision above.
+Those older checkouts can run:
 
 ```sh
 bash patches/pi/apply.sh
