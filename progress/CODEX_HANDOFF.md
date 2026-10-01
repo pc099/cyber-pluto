@@ -57,11 +57,35 @@ been rejected or blocked.
 
 ## Next steps for the harness
 
-**Lab update, 2026-10-01:** The operator-selected ICA1 VM is installed and running
+**Latest assessment and board update, 2026-10-01:** Decision 0009 supersedes the
+earlier no-ICA1-run statement below. Session
+`01a0f7c0-f080-72e9-87a0-1512c5ea1adf` ran explicitly unsandboxed with correct
+ICA1 engagement binding and no signing. Recorded root execution and finding #8's
+deterministic privilege validation pass are supported, but its promotion is
+unsigned and there are zero verified-current facts. It stopped at the token
+hard cap after 569s; execution and cleanup remain unknown. This review replayed
+no target commands. Architect/security/griller and coordinating empirical QA
+completed a huddle approving the revised sandbox-readiness design. Actual QA
+reproduced the /root bind-parent failure, passed limited relocated scratch
+confinement checks, exposed disabled-bwrap fallback and passed 30 focused
+launcher/binding/trust tests in approved host context. Full repaired sandbox,
+signing integration and allowed/denied egress are not yet proven.
+
+**Resume here:** implement `docs/proposals/sandbox-startup-readiness.md` under
+Decision 0009: sanitized /opt runtime, /var/lib writable engagement and trusted
+controls, mask /root/private tmp, fail-closed no-model readiness, protected stable
+signer endpoint and owned global launch/firewall lifetime. First prove fresh
+workspaces and unchanged-association resume with preserved holds/delegate guards.
+Refuse bound-v1 session relocation/conversion before publication; retain ICA1
+history unchanged. Separate migration, independent validation authority and full
+process supervision remain open. Review ICA1 cleanup debt before another target
+evaluation; readiness/setup never launches one automatically.
+
+**Earlier lab setup update, 2026-10-01:** The operator-selected ICA1 VM is installed and running
 on dedicated host-only `pluto-lab` at verified DHCP address `192.168.123.10`; HTTP
 returns 200. Jangow definition/images were removed as requested, with historical
-engagement/session records preserved. See `progress/ICA1_LAB.md`. No Pluto box
-test has started; sandbox startup/signing readiness remains the next check.
+engagement/session records preserved. See `progress/ICA1_LAB.md`. At that setup
+checkpoint no Pluto box test had started; the later session is assessed above.
 
 **Update, 2026-10-01:** The operator's research-led task is complete for the three
 board-approved reliability slices. See Decision 0008 and the dated research memo.
@@ -74,8 +98,8 @@ authorized committing all pending changes on 2026-10-01; the parent submodule
 reference now includes the Pi cancellation fix and nine-case test suite. The
 portable patch remains available for the earlier Pi base in `patches/pi/README.md`.
 
-Remaining next work is a board-reviewed sandbox startup/workspace proposal and
-local confinement/failure checks, followed by independent validation authority
+Remaining next work is the Decision 0009 board-approved sandbox startup/workspace
+implementation and full local confinement/failure checks, followed by independent validation authority
 and process supervision. The forged passed-validation-row residual remains open;
 the current promotion signs an evidence reference, not independently established
 evidence truth. Outcome metadata is continuity data; cleanup/execution remain
