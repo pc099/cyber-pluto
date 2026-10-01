@@ -58,7 +58,7 @@ test("a genuine (trustworthy) validated finding's report carries no tamper warni
 	assert.match(md, /Validation \(Gate 1/);
 });
 
-test("trustworthy defaults to true (enforcement off / not supplied) — backward compatible", () => {
+test("missing explicit verification produces a diagnostic report", () => {
 	const md = buildFindingReport({ finding: validated, target, validations: [passedValidation], credentials: creds });
-	assert.doesNotMatch(md, /UNVERIFIED|DO NOT SUBMIT/i);
+	assert.match(md, /UNVERIFIED|DO NOT SUBMIT/i);
 });

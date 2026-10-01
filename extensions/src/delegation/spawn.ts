@@ -10,14 +10,18 @@
  * `state/pluto.db` (shared engagement) and, critically, the same gates.
  *
  * Red-lines propagation (§10.4, the Session 5 contract): EVERY specialist's
- * extension set begins with red-lines + tool-log. A sub-agent therefore cannot
- * be spawned without the §10.4 gate and the audit log — the propagation is
+ * extension set begins with binding, red-lines, tool-log and lifecycle. A child
+ * inherits its parent's engagement association and interruption constraints,
+ * and cannot be spawned without the §10.4 gate and the audit log. Propagation is
  * structural, enforced here in one place, not left to each call site to
  * remember. `specialistExtensions` is the single chokepoint.
  */
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
+import { getActiveBinding, bindingPath, assertParentMayRun } from "../state/session-binding.js";
+import { getProviderHold } from "../lifecycle/provider-outcome.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,9 +35,8 @@ function ext(name: string): string {
 	return `extensions/src/${name}/index.ts`;
 }
 
-/** Every sub-agent gets these, first, no matter the specialist — the safety
- * gate and the audit log are non-negotiable and cannot be opted out of. */
-const ALWAYS: readonly string[] = [ext("red-lines"), ext("tool-log")];
+/** Every specialist gets continuity, scope, audit and interruption guards first. */
+const ALWAYS: readonly string[] = [ext("engagement-binding"), ext("red-lines"), ext("tool-log"), ext("lifecycle")];
 
 const SPECIALIST_EXTRA: Record<string, string[]> = {
 	// Full-handoff exploitation specialist: owns a validated finding through
@@ -52,7 +55,7 @@ export function knownSpecialist(name: string): name is Specialist {
 	return name in SPECIALIST_EXTRA;
 }
 
-/** The extension set for a specialist — ALWAYS (red-lines + tool-log) plus the
+/** The extension set for a specialist — ALWAYS guards plus the
  * specialist's own tools. Unknown specialists fall back to analyst (safe:
  * red-lines + tool-log, no offensive tools). */
 export function specialistExtensions(specialist: string): string[] {
@@ -69,11 +72,10 @@ export interface SubAgentTarget {
  * Phase-based model routing (§6.4). A delegation's specialist IS the engagement
  * phase, so the model is chosen per specialist:
  *
- *  - The `exploitation` specialist is the ATTACK-SURFACE phase — writing
- *    offensive payloads/exploit code. Hosted providers (e.g. OpenAI Codex)
- *    refuse this content, so it can be pointed at a separate model via
- *    PLUTO_ATTACK_PROVIDER / PLUTO_ATTACK_MODEL — typically a local
- *    open-source model (OpenAI-compatible endpoint) with no content refusals.
+ *  - The `exploitation` specialist can use an operator-configured model via
+ *    PLUTO_ATTACK_PROVIDER / PLUTO_ATTACK_MODEL for its declared task. This
+ *    configuration is not an automatic fallback after a provider policy block;
+ *    the parent's persisted interruption guard still applies before spawning.
  *  - recon / analyst (and the orchestrator) stay on the main provider
  *    (PLUTO_SUBAGENT_PROVIDER / PLUTO_SUBAGENT_MODEL).
  *
@@ -81,7 +83,7 @@ export interface SubAgentTarget {
  * once an attack model is explicitly configured — no behavior change otherwise.
  * The switch carries no gate change: red-lines + tool-log are still loaded into
  * the exploitation sub-agent (specialistExtensions/ALWAYS), so a different,
- * less-aligned model on the attack phase is still bounded by the §10.4 gate.
+ * configured model on the attack phase remains bounded by the §10.4 gate.
  */
 export function subAgentTarget(specialist: string): SubAgentTarget {
 	const mainProvider = process.env["PLUTO_SUBAGENT_PROVIDER"] ?? "openai-codex";
@@ -121,6 +123,8 @@ export async function spawnSubAgent(
 	cwd: string,
 	opts: { specialist: string; prompt: string; provider?: string; model?: string; timeoutMs?: number },
 ): Promise<SubAgentRun> {
+	const binding = getActiveBinding(cwd);
+	assertParentMayRun(binding, cwd);
 	const target = subAgentTarget(opts.specialist);
 	const provider = opts.provider ?? target.provider;
 	const model = opts.model ?? target.model;
@@ -128,9 +132,25 @@ export async function spawnSubAgent(
 	const args = buildSubAgentArgs({ provider, model, prompt: opts.prompt, extensions });
 	const { stdout, stderr } = await execFileAsync("node", args, {
 		cwd,
-		env: { ...process.env },
+		env: buildSubAgentEnv(cwd),
 		timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 		maxBuffer: 8 * 1024 * 1024,
 	});
 	return { specialist: opts.specialist, extensions, provider, model, output: stdout.trim(), stderr: stderr.trim() };
+}
+
+/** Ephemeral children must explicitly inherit a validated parent descriptor. */
+export function buildSubAgentEnv(cwd: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const binding = getActiveBinding(cwd, env);
+	assertParentMayRun(binding, cwd);
+	if (env.PLUTO_DELEGATE_ID) {
+		const ownHold = getProviderHold({ sessionId: env.PLUTO_DELEGATE_ID, sessionFile: `${binding.sessionFile}.delegate-${env.PLUTO_DELEGATE_ID}` });
+		if (ownHold.blocked) throw new Error(`Delegation blocked: calling specialist is held (${ownHold.reason})`);
+	}
+	const child: NodeJS.ProcessEnv = { ...env, PLUTO_PARENT_BINDING_PATH: bindingPath(binding.sessionFile), PLUTO_DELEGATE_ID: randomUUID() };
+	delete child.PLUTO_ACTIVE_SESSION_FILE;
+	delete child.PLUTO_ACTIVE_SESSION_ID;
+	delete child.PLUTO_ACTIVE_BINDING_PATH;
+	delete child.PLUTO_ADOPT_SESSION;
+	return child;
 }

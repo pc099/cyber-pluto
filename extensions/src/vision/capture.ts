@@ -14,7 +14,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { evidenceBaseDir } from "../state/db.js";
 
@@ -61,8 +61,8 @@ export async function captureScreenshot(cwd: string, url: string, opts: CaptureO
 	const height = opts.height ?? DEFAULT_HEIGHT;
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 	const relPath = join(evidenceDir(), `shot-${stamp}-${Math.random().toString(36).slice(2, 8)}.png`);
-	const absPath = join(cwd, relPath);
-	await mkdir(join(cwd, evidenceDir()), { recursive: true });
+	const absPath = resolve(cwd, relPath);
+	await mkdir(resolve(cwd, evidenceDir()), { recursive: true });
 
 	const args = [
 		"--headless",

@@ -12,13 +12,15 @@ import { buildSubAgentArgs, specialistExtensions, subAgentTarget } from "./spawn
 const RED_LINES = "extensions/src/red-lines/index.ts";
 const TOOL_LOG = "extensions/src/tool-log/index.ts";
 
-test("every specialist's extension set includes the red-lines gate first", () => {
+test("every specialist's extension set includes binding guard then red-lines", () => {
 	for (const specialist of ["exploitation", "recon", "analyst"]) {
 		const exts = specialistExtensions(specialist);
 		assert.ok(exts.includes(RED_LINES), `${specialist} must load red-lines`);
 		assert.ok(exts.includes(TOOL_LOG), `${specialist} must load tool-log`);
+		assert.ok(exts.includes("extensions/src/lifecycle/index.ts"), `${specialist} must persist its own provider interruptions`);
 		// red-lines is first — the gate is present before any specialist tool.
-		assert.equal(exts[0], RED_LINES, `${specialist} must load red-lines first`);
+		assert.equal(exts[0], "extensions/src/engagement-binding/index.ts", `${specialist} must check binding first`);
+		assert.equal(exts[1], RED_LINES, `${specialist} must load red-lines before specialist tools`);
 	}
 });
 

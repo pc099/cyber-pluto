@@ -29,6 +29,7 @@ test("the harness profile is valid JSON and declares the full stack", () => {
 	assert.ok(Array.isArray(p.extensions) && p.extensions.length >= 8, "profile must declare the extension stack");
 	assert.ok(Array.isArray(p.skills) && p.skills.length >= 1, "profile must declare the runtime-skill catalog");
 	assert.ok(p.defaultProvider, "profile must set a default provider");
+	assert.equal(p.extensions[0], "../extensions/src/engagement-binding/index.ts", "binding guard precedes every stateful extension");
 });
 
 test("every extension the profile declares exists on disk", () => {

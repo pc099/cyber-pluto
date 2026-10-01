@@ -87,20 +87,14 @@ export interface FindingsRepo {
 	 * is trustworthy (Item-0 increment 4). */
 	getPromotion(findingId: number): PromotionRow | undefined;
 	/**
-	 * Gate-1 enforcement (Item-0 increment 4): is this finding's `validated`
-	 * status backed by a promotion signature the root public key accepts?
-	 *   - not `validated` -> true (nothing to distrust);
-	 *   - no verifier configured (no readable public key) -> true (enforcement
-	 *     off; backward compatible, e.g. dev/tests);
-	 *   - `validated` with a verifier -> true ONLY if the recorded promotion's
-	 *     signature verifies against the reconstructed claim. A missing row, an
-	 *     unsigned row (the raw `UPDATE status='validated'` forge), or an invalid
-	 *     signature -> false.
+	 * Strict current-fact predicate: status must be validated/submitted, a
+	 * verifier must be configured, and the latest promotion must match this
+	 * finding and its passed validation before its signature is accepted.
+	 * Signature provenance does not close the forged-validation-row residual.
 	 */
 	isValidatedTrustworthy(findingId: number): boolean;
-	/** Validated findings that FAIL signature verification — for the operator
-	 * readout (cockpit/report/lifecycle) to flag possible tampering. Empty when
-	 * no verifier is configured. */
+	/** Validated findings without verified current attestations, including when
+	 * verification is unavailable. These remain diagnostic reproductions. */
 	listUntrustedValidated(targetId: number): FindingRow[];
 	/** Gate 1 rejection — `candidate` to `rejected` when the validator did not
 	 * reproduce the effect. Negative results are kept, never deleted. */
@@ -110,10 +104,8 @@ export interface FindingsRepo {
 	markSubmitted(findingId: number): FindingRow;
 	listByTarget(targetId: number): FindingRow[];
 	countByStatus(targetId: number): { candidate: number; validated: number; submitted: number; rejected: number };
-	/** True if this target has a Gate-1 promotion by one of the given foothold-
-	 * class validators — a proxy for "code-execution foothold achieved", used to
-	 * steer lifecycle guidance (pre- vs post-foothold). A promotion row only
-	 * exists for a validated finding, so this is a validated fact, not a guess. */
+	/** True only for a currently eligible, verified finding from a requested
+	 * validator. Submitted findings remain eligible; rejected findings do not. */
 	hasValidatedFootholdClass(targetId: number, validators: readonly string[]): boolean;
 }
 
@@ -121,10 +113,8 @@ export interface FindingsRepoOptions {
 	/** Injected privileged signer for Gate-1 promotions. When absent, promotions
 	 * are recorded UNSIGNED (backward-compatible; non-sandbox dev/tests). */
 	signer?: PromotionSigner;
-	/** Injected verifier (public key) for consumer enforcement. When absent,
-	 * enforcement is OFF and a `validated` status is trusted as-is (backward
-	 * compatible). When present, an unsigned/invalid `validated` finding cannot be
-	 * submitted and is reported as untrusted. */
+	/** Injected verifier (public key). When absent, no finding is authoritative
+	 * and Gate 2 refuses submission. Reproduction records remain visible. */
 	verifier?: PromotionVerifier;
 }
 
@@ -162,10 +152,14 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 	 * markSubmitted(), and listUntrustedValidated(). See the interface docstring
 	 * for the trust rules. */
 	function validatedIsTrustworthy(finding: FindingRow): boolean {
-		if (finding.status !== "validated") return true;
-		if (!opts.verifier) return true; // enforcement off (no public key)
+		if (finding.status !== "validated" && finding.status !== "submitted") return false;
+		if (!opts.verifier) return false;
 		const row = selectPromotion.get(finding.id) as PromotionRow | undefined;
-		if (!row) return false; // validated with no attestation at all (a raw status-flip)
+		if (!row || row.finding_id !== finding.id || row.target_id !== finding.target_id) return false;
+		const validation = selectValidationById.get(row.validation_id) as unknown as ValidationRow | undefined;
+		if (!validation || validation.finding_id !== finding.id || validation.passed !== 1 ||
+			validation.validator !== row.validator ||
+			row.evidence_ref !== (validation.baseline_ref ?? validation.attack_ref ?? "")) return false;
 		const claim: PromotionClaim = {
 			findingId: row.finding_id,
 			validationId: row.validation_id,
@@ -270,7 +264,6 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 			return validatedIsTrustworthy(requireFinding(findingId));
 		},
 		listUntrustedValidated(targetId) {
-			if (!opts.verifier) return [];
 			return (selectByTarget.all(targetId) as unknown as FindingRow[]).filter(
 				(f) => f.status === "validated" && !validatedIsTrustworthy(f),
 			);
@@ -299,7 +292,7 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 			// this is where the signed-promotion mechanism becomes load-bearing.
 			if (!validatedIsTrustworthy(finding)) {
 				throw new IllegalStatusTransition(
-					`finding ${findingId} is 'validated' but its Gate-1 promotion signature is missing or invalid — refusing to submit (possible tampering)`,
+					`finding ${findingId} has no verified current Gate-1 attestation (signature missing or invalid, verifier unavailable, or associations inconsistent) — refusing to submit`,
 				);
 			}
 			const { changes } = updateSubmitted.run(findingId);
@@ -320,11 +313,11 @@ export function createFindingsRepo(db: DatabaseSync, opts: FindingsRepoOptions =
 		},
 		hasValidatedFootholdClass(targetId, validators) {
 			if (validators.length === 0) return false;
-			const placeholders = validators.map(() => "?").join(",");
-			const row = db
-				.prepare(`SELECT COUNT(*) AS c FROM promotions WHERE target_id = ? AND validator IN (${placeholders})`)
-				.get(targetId, ...validators) as { c: number };
-			return row.c > 0;
+			return (selectByTarget.all(targetId) as unknown as FindingRow[]).some((finding) => {
+				if (!validatedIsTrustworthy(finding)) return false;
+				const promotion = selectPromotion.get(finding.id) as unknown as PromotionRow;
+				return validators.includes(promotion.validator);
+			});
 		},
 	};
 }

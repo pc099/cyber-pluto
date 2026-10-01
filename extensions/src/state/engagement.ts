@@ -28,6 +28,7 @@ import { type ScreenshotsRepo, createScreenshotsRepo } from "./screenshots-repo.
 import { type SubmissionsRepo, createSubmissionsRepo } from "./submissions-repo.js";
 import { type TargetsRepo, createTargetsRepo } from "./targets-repo.js";
 import { type ValidationsRepo, createValidationsRepo } from "./validations-repo.js";
+import { getActiveBinding } from "./session-binding.js";
 
 export interface Engagement {
 	db: DatabaseSync;
@@ -46,14 +47,27 @@ export interface Engagement {
 }
 
 let engagement: Engagement | undefined;
+let engagementIdentity: string | undefined;
+let engagementCwd: string | undefined;
+
+export function resetEngagement(): void {
+	engagement?.db.close();
+	engagement = undefined;
+	engagementIdentity = undefined;
+	engagementCwd = undefined;
+}
 
 export function startEngagement(cwd: string): Engagement {
-	if (engagement) {
-		return engagement;
-	}
+	let binding;
+	try { binding = getActiveBinding(cwd); }
+	catch (error) { resetEngagement(); throw error; }
+	const identity = JSON.stringify([binding.sessionId, process.env.PLUTO_DELEGATE_ID ?? "", binding.association]);
+	if (engagementIdentity !== identity) resetEngagement();
+	if (engagement) return engagement;
 
 	const db = openStateDb(cwd);
-	const repos = {
+	let repos: Engagement["repos"];
+	try { repos = {
 		targets: createTargetsRepo(db),
 		nodes: createNodesRepo(db),
 		attempts: createAttemptsRepo(db),
@@ -62,20 +76,33 @@ export function startEngagement(cwd: string): Engagement {
 		screenshots: createScreenshotsRepo(db),
 		credentials: createCredentialsRepo(db),
 		submissions: createSubmissionsRepo(db),
-	};
+	}; } catch (error) { db.close(); throw error; }
 
-	const label = process.env["PLUTO_TARGET_LABEL"] ?? "ad-hoc";
+	const label = binding.association.label;
 	const target =
 		repos.targets.findByLabel(label) ??
-		repos.targets.create({ label, host: process.env["PLUTO_TARGET_HOST"] ?? "localhost" });
+		repos.targets.create({ label, host: binding.association.host });
+	if (target.host?.toLowerCase() !== binding.association.host) {
+		db.close();
+		throw new Error("Engagement binding blocked: existing ledger target host differs from explicit binding");
+	}
 	const rootNode =
 		repos.nodes.findRoot(target.id) ??
 		repos.nodes.create({ targetId: target.id, nodeType: "recon", label: "session root" });
 
 	engagement = { db, targetId: target.id, rootNodeId: rootNode.id, repos };
+	engagementIdentity = identity;
+	engagementCwd = cwd;
 	return engagement;
 }
 
 export function getEngagement(): Engagement | undefined {
+	if (engagement) {
+		try {
+			const binding = getActiveBinding(engagementCwd ?? process.cwd());
+			const identity = JSON.stringify([binding.sessionId, process.env.PLUTO_DELEGATE_ID ?? "", binding.association]);
+			if (identity !== engagementIdentity) resetEngagement();
+		} catch (error) { resetEngagement(); throw error; }
+	}
 	return engagement;
 }

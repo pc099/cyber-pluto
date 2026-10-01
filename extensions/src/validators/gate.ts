@@ -6,7 +6,7 @@
  * through the single enforcement point (findings-repo.promote).
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { evidenceBaseDir } from "../state/db.js";
 import type { Engagement } from "../state/engagement.js";
@@ -28,12 +28,12 @@ export interface GateReport {
 async function writeEvidence(cwd: string, findingId: number, report: GateReport): Promise<{ baselineRef: string; attackRef: string }> {
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 	const relDir = join(evidenceDir(), `finding-${findingId}-${report.validator}-${stamp}`);
-	await mkdir(join(cwd, relDir), { recursive: true });
+	await mkdir(resolve(cwd, relDir), { recursive: true });
 	const baselineRef = join(relDir, "baseline.json");
 	const attackRef = join(relDir, "attacks.json");
-	await writeFile(join(cwd, baselineRef), JSON.stringify(report.baseline, null, 2), "utf8");
+	await writeFile(resolve(cwd, baselineRef), JSON.stringify(report.baseline, null, 2), "utf8");
 	await writeFile(
-		join(cwd, attackRef),
+		resolve(cwd, attackRef),
 		JSON.stringify({ steps: report.steps, attacks: report.attacks, diffSummary: report.diffSummary }, null, 2),
 		"utf8",
 	);
@@ -66,11 +66,12 @@ export async function recordAndGate(
 		const updated = report.passed
 			? engagement.repos.findings.promote(findingId, validation.id)
 			: engagement.repos.findings.reject(findingId);
-		const verdict = report.passed ? "VALIDATED" : "REJECTED";
+		const verified = report.passed && engagement.repos.findings.isValidatedTrustworthy(findingId);
+		const verdict = report.passed ? verified ? "VERIFIED CURRENT ATTESTATION" : "REPRODUCTION RECORDED — UNVERIFIED" : "REJECTED";
 		// Autonomy: a validated code-execution foothold auto-seeds the privesc
 		// checklist into the tree AND tells the agent to pivot — so it doesn't
 		// stall at the foothold waiting for an operator to name the vectors.
-		const isFoothold = report.passed && FOOTHOLD_CLASSES.has(report.validator);
+		const isFoothold = verified && FOOTHOLD_CLASSES.has(report.validator);
 		if (isFoothold) seedPrivescLeads(engagement);
 		return {
 			content: [
@@ -81,11 +82,12 @@ export async function recordAndGate(
 						`validations row #${validation.id} (passed=${report.passed ? 1 : 0})\n` +
 						`${report.diffSummary}\n` +
 						`Verifiable steps:\n${renderSteps(report)}\n` +
-						`Evidence: ${baselineRef}, ${attackRef}` +
+							`Evidence: ${baselineRef}, ${attackRef}\n` +
+							(verified ? "Attestation verifies signer provenance; evidence genuineness still requires review." : report.passed ? "The deterministic reproduction is recorded, but no verified current attestation was established. It is diagnostic evidence, not an authoritative result." : "") +
 						(isFoothold ? `\n\n${PRIVESC_DIRECTIVE}` : ""),
 				},
 			],
-			details: { validationId: validation.id, passed: report.passed, status: updated.status, footholdSeeded: isFoothold },
+			details: { validationId: validation.id, passed: report.passed, status: updated.status, verified, footholdSeeded: isFoothold },
 		};
 	} catch (err) {
 		if (err instanceof IllegalStatusTransition) {

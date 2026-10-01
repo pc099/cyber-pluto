@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { engagementFixture } from "../testing/engagement-fixture.js";
 import { checkRedLines, toInvocation } from "./check.js";
 import { extractHosts, normalizeHost, parseScopeHosts, resolveVhosts } from "./rules.js";
 
@@ -278,6 +279,7 @@ test("resolveVhosts folds in only names that /etc/hosts maps to an in-scope IP",
 // --- enforcement hook (the choke point) ---------------------------------
 
 async function loadHookHarness(cwd: string) {
+	engagementFixture(cwd, "red-lines-fixture", "10.0.0.5");
 	const mod = await import(`./index.js?redlines=${Math.random()}`);
 	const handlers: Record<string, Function[]> = {};
 	const pi = {

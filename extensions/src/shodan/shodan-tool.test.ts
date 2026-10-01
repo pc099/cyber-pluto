@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test, before, after } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { startEngagement } from "../state/engagement.js";
+import { engagementFixture } from "../testing/engagement-fixture.js";
 import shodanExtension from "./index.js";
 
 type Tool = { name: string; execute: (id: string, p: Record<string, unknown>, s: unknown, u: unknown, ctx: { cwd: string }) => Promise<{ content: Array<{ text?: string }>; details?: Record<string, unknown> }> };
@@ -68,7 +69,7 @@ before(async () => {
 
 	const fakePi = { on: () => {}, registerTool: (t: Tool) => tools.set(t.name, t), registerCommand: () => {} } as unknown as ExtensionAPI;
 	shodanExtension(fakePi);
-	startEngagement(dir);
+	engagementFixture(dir, "shodan-test", "10.129.1.5", "10.129.1.0/24");
 });
 
 after(() => server?.close());

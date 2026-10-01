@@ -24,6 +24,8 @@ export interface RunSummaryInput {
 	counts: { candidate: number; validated: number; submitted: number; rejected: number };
 	/** validated findings that FAIL Gate-1 signature (possible tampering). */
 	untrustedValidated: number;
+	/** Strictly verified eligible findings, including submitted findings. */
+	verifiedCurrentFindings: number;
 	credsRecovered: number;
 	nodeCount: number;
 	attemptCount: number;
@@ -60,9 +62,10 @@ export interface RunSummary extends RunSummaryInput {
 }
 
 function deriveMilestone(i: RunSummaryInput): Milestone {
-	if (i.hasRoot) return "root";
-	if (i.hasFoothold || i.credsRecovered > 0) return "foothold";
-	if (i.counts.candidate > 0 || i.counts.validated > 0) return "candidate_found";
+	const verified = i.signatureEnforced && i.verifiedCurrentFindings > 0;
+	if (verified && i.hasRoot) return "root";
+	if (verified && i.hasFoothold) return "foothold";
+	if (i.counts.candidate > 0 || i.counts.validated > 0 || i.counts.submitted > 0) return "candidate_found";
 	// More than a bare port scan's worth of investigation nodes = surface mapped.
 	if (i.nodeCount > 3) return "surface_mapped";
 	if (i.attemptCount > 0) return "recon";

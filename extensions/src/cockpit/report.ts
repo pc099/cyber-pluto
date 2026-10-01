@@ -14,10 +14,8 @@ export interface ReportInputs {
 	credentials: CredentialRow[];
 	/**
 	 * Whether the finding's `validated` status is backed by a Gate-1 promotion
-	 * signature the root public key accepts (Item-0 enforcement). Defaults to
-	 * true (enforcement off / not supplied). When false, the report leads with a
-	 * prominent TAMPER warning instead of reading as a submission-ready finding —
-	 * a forged 'validated' row must never be dressed up as genuine.
+	 * signature the root public key accepts, with matching current associations.
+	 * Defaults to false: callers must explicitly establish verification.
 	 */
 	trustworthy?: boolean;
 }
@@ -28,20 +26,22 @@ function titleFor(finding: FindingRow, v: ValidationRow | undefined): string {
 }
 
 export function buildFindingReport(inp: ReportInputs): string {
-	const { finding, target, validations, credentials, trustworthy = true } = inp;
-	const passed = validations.filter((v) => v.passed === 1);
-	const primary = passed[0] ?? validations[0];
+	const { finding, target, validations, credentials, trustworthy = false } = inp;
+	const eligible = finding.status === "validated" || finding.status === "submitted";
+	const verified = trustworthy && eligible && finding.target_id === target.id;
+	const associated = validations.filter((v) => v.finding_id === finding.id);
+	const passed = associated.filter((v) => v.passed === 1);
+	const primary = passed[0] ?? associated[0];
 	const lines: string[] = [];
 
 	lines.push(`# ${titleFor(finding, primary)}`);
 	lines.push("");
-	if (finding.status === "validated" && !trustworthy) {
+	if (!verified) {
 		lines.push(
-			"> **⚠ UNVERIFIED — DO NOT SUBMIT.** This finding reads `validated` in the " +
-				"state DB, but its Gate-1 promotion signature is **missing or invalid**. That " +
-				"means the promotion was NOT produced by the privileged validator (possible " +
-				"tampering, or a run without signing configured). Treat everything below as " +
-				"UNCONFIRMED and re-validate before relying on it.",
+			"> **⚠ UNVERIFIED — DO NOT SUBMIT.** No verified current Gate-1 attestation " +
+				"was established for this report. Verification may be unavailable, the signature " +
+				"or associations invalid, or the current status ineligible. Recorded reproduction " +
+				"is diagnostic evidence; establish verification before relying on it.",
 		);
 		lines.push("");
 	}
@@ -61,7 +61,9 @@ export function buildFindingReport(inp: ReportInputs): string {
 
 	if (passed.length > 0) {
 		lines.push("## Validation (Gate 1 — deterministic)");
-		lines.push("This finding was reproduced by a deterministic, non-LLM validator (baseline vs. attack):");
+		lines.push(verified
+			? "A verified attestation references a passed deterministic validation. It attests signer provenance; evidence genuineness still requires review."
+			: "The ledger records the following passed deterministic validations; their attestation was not verified for this report:");
 		lines.push("");
 		for (const v of passed) {
 			lines.push(`- **Validator**: \`${v.validator}\` — reproduced ${v.validated_at ? `at ${v.validated_at}` : ""}`);
@@ -85,8 +87,7 @@ export function buildFindingReport(inp: ReportInputs): string {
 
 	lines.push("## Impact");
 	lines.push(
-		"See the reproduced difference above. Access was demonstrated to the minimum extent that proves impact; " +
-			"no data was harvested or retained beyond what evidences the finding.",
+		"Review the recorded difference and referenced evidence above. This generated report does not independently establish impact, coverage, or evidence retention.",
 	);
 	lines.push("");
 	lines.push("## Remediation");

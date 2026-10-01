@@ -9,7 +9,7 @@
  * operate against the same target/tree rather than each creating their own.
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseBaseTool } from "../shared/bash-command.js";
 import { capField, redactSecrets } from "../shared/redact.js";
 import { evidenceBaseDir } from "../state/db.js";
@@ -97,7 +97,7 @@ export async function recordAttemptEnd(
 
 async function writeOutputEvidence(cwd: string, attemptId: number, result: unknown): Promise<string> {
 	const relPath = join(evidenceDir(), `${attemptId}.json`);
-	const absPath = join(cwd, relPath);
+	const absPath = resolve(cwd, relPath);
 	await mkdir(dirname(absPath), { recursive: true });
 	// The evidence copy must not be a plaintext bypass of the JSONL redaction:
 	// cap the oversized field, then mask secrets (patterns + recovered creds).

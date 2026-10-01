@@ -82,7 +82,7 @@ test("a promotion row carrying an ATTACKER signature is also refused at Gate 2",
 	assert.throws(() => findings.markSubmitted(finding.id), IllegalStatusTransition);
 });
 
-test("enforcement is OFF (backward compatible) when no verifier is configured", () => {
+test("missing verification refuses Gate 2 and never establishes a current fact", () => {
 	const d = db();
 	const targets = createTargetsRepo(d);
 	const findings = createFindingsRepo(d); // no signer, no verifier
@@ -90,9 +90,58 @@ test("enforcement is OFF (backward compatible) when no verifier is configured", 
 	const finding = findings.create({ targetId: target.id, service: "http" });
 	d.prepare("UPDATE findings SET status = 'validated' WHERE id = ?").run(finding.id);
 
-	// With no public key to check against, we cannot distrust — the raw status is
-	// taken at face value, exactly as before this change.
+	assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+	assert.deepEqual(findings.listUntrustedValidated(target.id).map((f) => f.id), [finding.id]);
+	assert.throws(() => findings.markSubmitted(finding.id), IllegalStatusTransition);
+});
+
+test("milestones require current status, verified signature and matching passed associations", () => {
+	const d = db();
+	const targets = createTargetsRepo(d);
+	const validations = createValidationsRepo(d);
+	const findings = createFindingsRepo(d, { signer: goodSigner, verifier });
+	const target = targets.create({ label: "current" });
+	const other = targets.create({ label: "other" });
+	const finding = findings.create({ targetId: target.id });
+	const v = validations.create({ findingId: finding.id, validator: "privilege_escalation", baselineRef: "e/b", diffSummary: "fixture", passed: true });
+	assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+	findings.promote(finding.id, v.id);
+	assert.equal(findings.hasValidatedFootholdClass(target.id, ["privilege_escalation"]), true);
+	assert.equal(findings.hasValidatedFootholdClass(other.id, ["privilege_escalation"]), false);
+	findings.markSubmitted(finding.id);
 	assert.equal(findings.isValidatedTrustworthy(finding.id), true);
-	assert.deepEqual(findings.listUntrustedValidated(target.id), []);
-	assert.equal(findings.markSubmitted(finding.id).status, "submitted");
+	assert.equal(findings.hasValidatedFootholdClass(target.id, ["privilege_escalation"]), true);
+	for (const status of ["candidate", "rejected"]) {
+		d.prepare("UPDATE findings SET status = ? WHERE id = ?").run(status, finding.id);
+		assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+		assert.equal(findings.hasValidatedFootholdClass(target.id, ["privilege_escalation"]), false);
+	}
+	d.prepare("UPDATE findings SET status = 'validated' WHERE id = ?").run(finding.id);
+	d.prepare("UPDATE validations SET passed = 0 WHERE id = ?").run(v.id);
+	assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+	d.prepare("UPDATE validations SET passed = 1, validator = 'different' WHERE id = ?").run(v.id);
+	assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+	d.prepare("UPDATE validations SET validator = 'privilege_escalation', baseline_ref = 'changed' WHERE id = ?").run(v.id);
+	assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+	d.prepare("UPDATE validations SET baseline_ref = 'e/b' WHERE id = ?").run(v.id);
+	d.prepare("UPDATE findings SET target_id = ? WHERE id = ?").run(other.id, finding.id);
+	assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+	d.close();
+});
+
+test("unsigned promotions and signed rows without a verifier cannot establish milestones", () => {
+	for (const opts of [{ verifier }, { signer: goodSigner }]) {
+		const d = db();
+		const targets = createTargetsRepo(d);
+		const validations = createValidationsRepo(d);
+		const findings = createFindingsRepo(d, opts);
+		const target = targets.create({ label: "diagnostic" });
+		const finding = findings.create({ targetId: target.id });
+		const v = validations.create({ findingId: finding.id, validator: "privilege_escalation", diffSummary: "fixture", passed: true });
+		findings.promote(finding.id, v.id);
+		assert.equal(findings.isValidatedTrustworthy(finding.id), false);
+		assert.equal(findings.hasValidatedFootholdClass(target.id, ["privilege_escalation"]), false);
+		assert.throws(() => findings.markSubmitted(finding.id), IllegalStatusTransition);
+		d.close();
+	}
 });

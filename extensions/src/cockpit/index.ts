@@ -116,13 +116,7 @@ async function showSummary(ctx: ExtensionCommandContext): Promise<void> {
 	const c = e.repos.findings.countByStatus(e.targetId);
 	const untrusted = e.repos.findings.listUntrustedValidated(e.targetId).length;
 	const creds = e.repos.credentials.listByTarget(e.targetId);
-	// The honest picture (Decision 0005 Increment 4): a real foothold — recovered
-	// credentials, candidate findings — must be visible even when 0 are validated,
-	// so a genuine compromise is never hidden behind a headline "0 validated".
-	const footholdSignals: string[] = [];
-	if (creds.length) footholdSignals.push(`${creds.length} credential(s) recovered`);
-	if (c.validated > untrusted) footholdSignals.push(`${c.validated - untrusted} validated finding(s)`);
-	if (c.candidate) footholdSignals.push(`${c.candidate} candidate(s) awaiting Gate 1`);
+	const verified = e.repos.findings.listByTarget(e.targetId).filter((f) => e.repos.findings.isValidatedTrustworthy(f.id)).length;
 	const lines = [
 		`target     ${t?.host ?? t?.label} (${t?.phase ?? "recon"})`,
 		`findings   ✓${c.validated} validated · ?${c.candidate} candidate · →${c.submitted} submitted · ✗${c.rejected} rejected`,
@@ -130,9 +124,7 @@ async function showSummary(ctx: ExtensionCommandContext): Promise<void> {
 		`creds      ${creds.length} recovered${creds.length ? `: ${creds.map((r) => r.username ?? "?").join(", ")}` : ""}`,
 		`tree       ${e.repos.nodes.countByTarget(e.targetId)} nodes · ${e.repos.attempts.countByTarget(e.targetId)} attempts`,
 		"────────────────────────────────────────────",
-		footholdSignals.length
-			? `FOOTHOLD/PROGRESS: ${footholdSignals.join(" · ")}${c.validated === 0 && creds.length ? "  (note: real progress exists despite 0 validated — validate the vuln class to count it)" : ""}`
-			: "No foothold or findings yet — still enumerating.",
+		`Verified current findings: ${verified}. Credential records and candidates do not establish an execution foothold.`,
 	];
 	await ctx.ui.select("Engagement summary", lines);
 }
@@ -191,8 +183,23 @@ async function doApprove(ctx: ExtensionCommandContext, e: Engagement, findingId:
 	const approver = (await ctx.ui.input("Approver name (compliance record)", process.env["USER"] ?? "operator")) || process.env["USER"] || "operator";
 	const program = (await ctx.ui.input("Program / handle (optional)", process.env["PLUTO_PROGRAM"] ?? "")) || null;
 	try {
-		const sub = e.repos.submissions.create({ findingId, approvedBy: approver, program });
-		e.repos.findings.markSubmitted(findingId);
+		// All operator UI awaits finish before the transaction. Recheck current
+		// status/attestation under the write lock so changed evidence cannot leave
+		// a stale approval row behind.
+		e.db.exec("BEGIN IMMEDIATE");
+		let sub;
+		try {
+			const current = e.repos.findings.getById(findingId);
+			if (current?.status !== "validated" || !e.repos.findings.isValidatedTrustworthy(findingId)) {
+				throw new IllegalStatusTransition(`Finding #${findingId} changed while awaiting approval or has no verified current attestation; approval refused.`);
+			}
+			sub = e.repos.submissions.create({ findingId, approvedBy: approver, program });
+			e.repos.findings.markSubmitted(findingId);
+			e.db.exec("COMMIT");
+		} catch (err) {
+			e.db.exec("ROLLBACK");
+			throw err;
+		}
 		ctx.ui.notify(`Approved. submissions #${sub.id} by ${approver}. Finding #${findingId} → submitted. File it on the platform manually.`, "info");
 		refreshWidget(ctx);
 	} catch (err) {
@@ -205,7 +212,7 @@ async function showFindingDetail(ctx: ExtensionCommandContext, e: Engagement, fi
 	const trustworthy = e.repos.findings.isValidatedTrustworthy(finding.id);
 	const detail = [
 		fmtFinding(finding),
-		...(finding.status === "validated" && !trustworthy
+		...((finding.status === "validated" || finding.status === "submitted") && !trustworthy
 			? ["  ⚠ UNVERIFIED — Gate-1 promotion signature missing/invalid (possible tampering)"]
 			: []),
 		...vs.map((v) => `  gate1 ${v.validator} passed=${v.passed} — ${(v.diff_summary ?? "").slice(0, 90)}`),
@@ -408,7 +415,7 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 			const filter = params.status?.trim().toLowerCase();
 			if (filter) list = list.filter((f) => f.status === filter);
 			const lines = list.map((f) => {
-				const unverified = f.status === "validated" && !e.repos.findings.isValidatedTrustworthy(f.id);
+				const unverified = (f.status === "validated" || f.status === "submitted") && !e.repos.findings.isValidatedTrustworthy(f.id);
 				return `${fmtFinding(f)}${unverified ? "  ⚠ UNVERIFIED (Gate-1 signature missing/invalid — NOT a fact)" : ""}`;
 			});
 			const summary = `Ledger: validated ${c.validated} · candidate ${c.candidate} · submitted ${c.submitted} · rejected ${c.rejected}`;
@@ -428,14 +435,14 @@ export default function cockpitExtension(pi: ExtensionAPI): void {
 		name: "generate_report",
 		label: "Generate Finding Report (Gate-1 grounded)",
 		description:
-			"Write a submission-ready Markdown report for a finding, built ONLY from its recorded Gate-1 validation + evidence. Refuses any finding that is not 'validated' (and, when signing is enabled, whose promotion signature does not verify) — do not attempt to report unconfirmed work; validate it first. Never fabricate a report by writing a file yourself.",
+			"Write a Markdown report from an eligible finding's recorded Gate-1 evidence and verified current attestation. Refuses missing verification or an ineligible current status. Evidence genuineness requires review; Gate 2 remains operator-only.",
 		parameters: Type.Object({ finding_id: Type.Number({ description: "id of a VALIDATED finding" }) }),
 		async execute(_id, params, _s, _u, ctx) {
 			const e = eng();
 			if (!e) return { content: [{ type: "text", text: "No engagement DB open." }], details: {} };
 			const finding = e.repos.findings.getById(params.finding_id);
 			if (!finding) return { content: [{ type: "text", text: `No finding #${params.finding_id}.` }], details: {} };
-			if (finding.status !== "validated") {
+			if (finding.status !== "validated" && finding.status !== "submitted") {
 				return {
 					content: [
 						{

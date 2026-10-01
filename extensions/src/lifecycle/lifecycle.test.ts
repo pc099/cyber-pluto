@@ -139,6 +139,7 @@ function baseSummaryInput() {
 		targetLabel: "box", host: "10.0.0.5", stopReason: "in_progress",
 		counts: { candidate: 0, validated: 0, submitted: 0, rejected: 0 },
 		untrustedValidated: 0, credsRecovered: 0, nodeCount: 0, attemptCount: 0,
+		verifiedCurrentFindings: 0,
 		attemptsByClass: {}, hasFoothold: false, hasRoot: false,
 		signatureEnforced: true,
 		elapsedSeconds: 0, contextTokensSeen: 0,
@@ -151,13 +152,19 @@ test("run-summary milestone is derived from proven facts, ascending", () => {
 	assert.equal(buildRunSummary({ ...baseSummaryInput(), attemptCount: 2 }).reached, "recon");
 	assert.equal(buildRunSummary({ ...baseSummaryInput(), attemptCount: 5, nodeCount: 6 }).reached, "surface_mapped");
 	assert.equal(buildRunSummary({ ...baseSummaryInput(), counts: { candidate: 1, validated: 0, submitted: 0, rejected: 0 } }).reached, "candidate_found");
-	// A validated foothold OR recovered creds reaches "foothold".
-	assert.equal(buildRunSummary({ ...baseSummaryInput(), hasFoothold: true }).reached, "foothold");
-	assert.equal(buildRunSummary({ ...baseSummaryInput(), credsRecovered: 1 }).reached, "foothold");
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), hasFoothold: true, verifiedCurrentFindings: 1 }).reached, "foothold");
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), credsRecovered: 1 }).reached, "started");
 	// Root is the top milestone and dominates everything else.
-	assert.equal(buildRunSummary({ ...baseSummaryInput(), hasRoot: true, hasFoothold: true, counts: { candidate: 3, validated: 2, submitted: 0, rejected: 1 } }).reached, "root");
+	assert.equal(buildRunSummary({ ...baseSummaryInput(), hasRoot: true, hasFoothold: true, verifiedCurrentFindings: 2, counts: { candidate: 3, validated: 2, submitted: 0, rejected: 1 } }).reached, "root");
 	assert.ok(milestoneRank("root") > milestoneRank("foothold"));
 	assert.ok(milestoneRank("foothold") > milestoneRank("candidate_found"));
+});
+
+test("unverified booleans cannot yield a root milestone; submitted verified facts remain eligible", () => {
+	const input = { ...baseSummaryInput(), hasRoot: true, hasFoothold: true, counts: { candidate: 0, validated: 1, submitted: 0, rejected: 0 } };
+	assert.equal(buildRunSummary(input).reached, "candidate_found");
+	assert.equal(buildRunSummary({ ...input, signatureEnforced: false, verifiedCurrentFindings: 1 }).reached, "candidate_found");
+	assert.equal(buildRunSummary({ ...input, counts: { candidate: 0, validated: 0, submitted: 1, rejected: 0 }, verifiedCurrentFindings: 1 }).reached, "root");
 });
 
 test("run-summary discounts signature-failing validated findings (enforcement on)", () => {

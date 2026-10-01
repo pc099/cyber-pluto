@@ -16,10 +16,10 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 
 /** SHA-256 (hex) over the named evidence files' contents, each domain-separated
- * by its ref. Returns "" when no ref is readable. `cwd`-relative refs. */
+ * by its ref. Returns "" when no ref is readable. Relative or absolute refs. */
 export function hashEvidence(cwd: string, refs: Array<string | null | undefined>): string {
 	const h = createHash("sha256");
 	let any = false;
@@ -27,7 +27,7 @@ export function hashEvidence(cwd: string, refs: Array<string | null | undefined>
 		if (!ref) continue;
 		let buf: Buffer;
 		try {
-			buf = readFileSync(join(cwd, ref));
+			buf = readFileSync(resolve(cwd, ref));
 		} catch {
 			continue; // missing/unreadable → contributes nothing
 		}

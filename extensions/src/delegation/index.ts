@@ -17,7 +17,7 @@
  * own pre-execution check.
  */
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { evidenceBaseDir } from "../state/db.js";
@@ -37,8 +37,8 @@ async function logDelegation(
 	// Retain the full sub-agent output as evidence.
 	const rel = join(evidenceDir(), `delegation-${attemptId ?? Date.now()}.txt`);
 	try {
-		await mkdir(join(cwd, evidenceDir()), { recursive: true });
-		await writeFile(join(cwd, rel), run.output, "utf8");
+		await mkdir(resolve(cwd, evidenceDir()), { recursive: true });
+		await writeFile(resolve(cwd, rel), run.output, "utf8");
 	} catch (err) {
 		console.error("[pluto/delegation] failed to write delegation evidence:", err);
 	}

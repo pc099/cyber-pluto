@@ -17,7 +17,8 @@
  *     Chaitanya. A bypass/evasion mutation is a DIFFERENT call, so it reads as
  *     progress, not repetition (§6.5.2).
  */
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -46,6 +47,13 @@ import {
 import { buildRunSummary } from "./run-summary.js";
 import { resolveVerifier } from "../state/promotion-verifier.js";
 import type { Engagement } from "../state/engagement.js";
+import { getActiveBinding } from "../state/session-binding.js";
+import {
+	classifyProviderError, consumeProviderRetry, getProviderHold, initializeOutcome,
+	readOutcome, recordCompletedTool, recordHardCap, recordLocalInterruption,
+	recordProviderError, recordProviderRecovery, requestProviderRetry, retryIsActive,
+	settleOutcome, type OutcomeBinding,
+} from "./provider-outcome.js";
 
 const LOG = { dir: "logs", file: "lifecycle.jsonl" };
 
@@ -109,7 +117,8 @@ const state = {
 	noProgress: INITIAL_NO_PROGRESS_STATE,
 	noProgressHits: 0,
 	nodeCountHistory: [] as number[],
-	// Active wall-clock is measured from process start, NOT targets.created_at:
+	// Run elapsed includes idle/provider interruptions; never call this active
+	// target-testing time. The durable outcome start survives process restarts.
 	// with per-engagement DBs a target persists across resumes, so created_at
 	// would false-stop any engagement older than the wall cap on its first call.
 	sessionStart: Date.now(),
@@ -146,6 +155,10 @@ async function publishStatus(cwd: string, status: { contextTokensSeen: number; t
  * board reviews facts, not transcripts. Best-effort — never affects the run. */
 async function publishRunSummary(cwd: string, engagement: Engagement, stopReason: string, elapsed: number, tokens: number): Promise<void> {
 	try {
+		const binding = activeOutcomeBinding(cwd);
+		if (stopReason.startsWith("hard_cap:")) recordHardCap(binding, stopReason);
+		const outcome = readOutcome(binding);
+		if (outcome?.state === "hard_cap" || outcome?.providerBlocked || (stopReason === "in_progress" && outcome?.state === "awaiting_operator")) stopReason = outcome.terminalReason;
 		const tid = engagement.targetId;
 		const target = engagement.repos.targets.getById(tid);
 		const attemptsByClass: Record<string, number> = {};
@@ -158,7 +171,8 @@ async function publishRunSummary(cwd: string, engagement: Engagement, stopReason
 			host: target?.host ?? null,
 			stopReason,
 			counts: engagement.repos.findings.countByStatus(tid),
-			untrustedValidated: engagement.repos.findings.listUntrustedValidated(tid).length,
+				untrustedValidated: engagement.repos.findings.listUntrustedValidated(tid).length,
+				verifiedCurrentFindings: engagement.repos.findings.listByTarget(tid).filter((f) => engagement.repos.findings.isValidatedTrustworthy(f.id)).length,
 			signatureEnforced: resolveVerifier() !== undefined,
 			credsRecovered: engagement.repos.credentials.listByTarget(tid).length,
 			nodeCount: engagement.repos.nodes.countByTarget(tid),
@@ -170,7 +184,7 @@ async function publishRunSummary(cwd: string, engagement: Engagement, stopReason
 			contextTokensSeen: tokens,
 		});
 		await mkdir(stateDir(cwd), { recursive: true });
-		await writeFile(join(stateDir(cwd), "run-summary.json"), JSON.stringify(summary, null, 2), "utf8");
+		await writeFile(join(stateDir(cwd), "run-summary.json"), JSON.stringify({ ...summary, elapsedClock: "run_elapsed_including_idle" }, null, 2), "utf8");
 	} catch {
 		// telemetry must never affect the engagement
 	}
@@ -198,30 +212,42 @@ function commandText(event: ToolCallEvent): string {
 	return `${event.toolName}:${JSON.stringify(event.input)}`;
 }
 
+/** Ephemeral delegates have their own outcome; never overwrite the parent's
+ * sidecar. The binding guard independently checks the parent's current hold. */
+function activeOutcomeBinding(cwd: string): OutcomeBinding {
+	const binding = getActiveBinding(cwd);
+	if (!process.env.PLUTO_PARENT_BINDING_PATH) return binding;
+	const id = process.env.PLUTO_DELEGATE_ID;
+	if (!id || !/^[A-Za-z0-9-]{1,96}$/.test(id)) throw new Error("Invalid ephemeral delegate identity.");
+	return { sessionId: id, sessionFile: `${binding.sessionFile}.delegate-${id}` };
+}
+
 export default function lifecycleExtension(pi: ExtensionAPI): void {
+	let runtimeId = randomUUID();
+	let outcomeFailure: string | undefined;
+	const failOutcome = (ctx: ExtensionContext): void => {
+		outcomeFailure = "Outcome continuity is unavailable; operator review is required before requests or tools.";
+		console.error(`[pluto/lifecycle] ${outcomeFailure}`);
+		ctx.abort();
+	};
 	pi.on("session_start", (_e: SessionStartEvent, ctx: ExtensionContext) => {
-		startEngagement(ctx.cwd);
-		// A brand-new session means the operator is present and starting fresh —
-		// never inherit a PAUSED flag from a prior run. (This once deadlocked the
-		// harness: a stale pause blocked every tool call with no way to resume.)
+		runtimeId = randomUUID();
+		outcomeFailure = undefined;
 		try {
-			rmSync(pausePath(ctx.cwd), { force: true });
+			const binding = getActiveBinding(ctx.cwd);
+			const inherited = process.env.PLUTO_PARENT_BINDING_PATH ? readOutcome(binding) : binding.forkedFrom ? readOutcome(binding.forkedFrom) : undefined;
+			const outcome = initializeOutcome(activeOutcomeBinding(ctx.cwd), inherited);
+			state.sessionStart = Date.parse(outcome.startedAt);
+			if (!Number.isFinite(state.sessionStart)) throw new Error("Invalid saved run clock.");
+			startEngagement(ctx.cwd);
 		} catch {
-			/* best effort */
+			failOutcome(ctx);
+			return;
 		}
-		// Footgun guard (board fix): a bare `pi` (not the `pluto` launcher) sets no
-		// PLUTO_TARGET_HOST, so the engagement falls back to the shared default DB
-		// whose target is loopback — and the REAL target then reads as out-of-scope,
-		// silently wasting a whole session. Warn loudly so the operator relaunches
-		// via the launcher instead of grinding against the wrong scope.
-		const host = (process.env["PLUTO_TARGET_HOST"] ?? "").trim().toLowerCase();
-		if (host === "" || host === "127.0.0.1" || host === "localhost" || host === "::1") {
-			console.error(
-				"[pluto/lifecycle] ⚠ No real target set (PLUTO_TARGET_HOST is unset/loopback). " +
-					"You are probably on the default engagement — the real target will read as OUT OF SCOPE. " +
-					"Launch via:  pluto --target <ip> --scope <ip> --label <name>  (not bare `pi`).",
-			);
-		}
+		// Resuming/forking must preserve an existing environmental pause. Only
+		// the operator's existing /unpause control may clear it.
+		// Explicit pinned loopback lab targets are valid. Configuration readiness
+		// is enforced by the first binding guard, rather than inferred from IP.
 		// Doctrine guard: hand-written "engagement complete" files are NOT
 		// authoritative — the state-DB ledger is the only source of completion
 		// truth. Warn if any resurfaced at the repo root (they must never be trusted).
@@ -236,7 +262,79 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		}
 	});
 
+	pi.on("input", (event, ctx) => {
+		try {
+			if (outcomeFailure) { console.error(`[pluto/lifecycle] ${outcomeFailure}`); return { action: "handled" }; }
+			const binding = activeOutcomeBinding(ctx.cwd);
+			const hold = getProviderHold(binding);
+			if (!hold.blocked) return { action: "continue" };
+			if (hold.reason === "provider_blocked" && event.source !== "extension" && ctx.isIdle() && consumeProviderRetry(binding, runtimeId)) return { action: "continue" };
+			console.error(`[pluto/lifecycle] Request held (${hold.reason}). Operator: /provider-retry <reason> permits one deliberate retry; it cannot clear a hard cap.`);
+			return { action: "handled" };
+		} catch { failOutcome(ctx); return { action: "handled" }; }
+	});
+
+	pi.registerCommand("provider-retry", {
+		description: "Pluto: authorize one operator-initiated provider retry after a policy interruption; usage /provider-retry <reason>",
+		handler: async (args, ctx) => {
+			try {
+				if (outcomeFailure) throw new Error(outcomeFailure);
+				if (process.env.PLUTO_PARENT_BINDING_PATH) throw new Error("A delegate cannot grant itself a provider retry.");
+				if (!ctx.isIdle()) throw new Error("Wait for the current attempt to settle before authorizing a retry.");
+				requestProviderRetry(activeOutcomeBinding(ctx.cwd), args);
+				ctx.ui.notify("One deliberate retry is authorized for your next input. Prior interruption and unknown execution/cleanup remain recorded.", "info");
+			} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "Retry authorization failed.", "warning"); }
+		},
+	});
+
+	pi.on("message_end", (event, ctx) => {
+		const error = classifyProviderError(event.message);
+		// Synchronous abort before disk I/O: the original assistant error is
+		// retained byte-for-byte; Pi's generic cancel latch stops retries/queues.
+		if (error?.category === "provider_blocked") ctx.abort();
+		try {
+			const binding = activeOutcomeBinding(ctx.cwd);
+			// A policy-recovery grant authorizes one explicit request. A transport
+			// failure during that request does not grant a new automatic attempt.
+			// Normal transient retries outside a policy hold remain unchanged.
+			if (error && readOutcome(binding)?.providerBlocked) ctx.abort();
+			if (error) recordProviderError(binding, error);
+			else if (event.message.role === "assistant" && ["stop", "toolUse"].includes(String(event.message.stopReason))) recordProviderRecovery(binding, runtimeId);
+		} catch { failOutcome(ctx); }
+	});
+
+	const finalizeTurn = async (ctx: ExtensionContext): Promise<void> => {
+		try {
+			const binding = activeOutcomeBinding(ctx.cwd);
+			const outcome = settleOutcome(binding);
+			const engagement = getEngagement();
+			if (engagement) await publishRunSummary(ctx.cwd, engagement, outcome.terminalReason, (Date.now() - state.sessionStart) / 1000, state.contextTokensSeen);
+		} catch { failOutcome(ctx); }
+	};
+	pi.on("agent_settled", (_event, ctx) => finalizeTurn(ctx));
+	pi.on("agent_end", async (_event, ctx) => {
+		// Compatibility telemetry only: agent_end can precede retries. Never
+		// clear a retry allowance here; agent_settled is the final turn boundary.
+		try {
+			const outcome = readOutcome(activeOutcomeBinding(ctx.cwd));
+			const engagement = getEngagement();
+			if (engagement && outcome) await publishRunSummary(ctx.cwd, engagement, outcome.terminalReason, (Date.now() - state.sessionStart) / 1000, state.contextTokensSeen);
+		} catch { failOutcome(ctx); }
+	});
+
+	pi.on("tool_result", (event, ctx) => {
+		if (event.isError && event.content.some(c => c.type === "text" && /^RED-LINE \(out_of_scope_scanning\):/.test(c.text))) {
+			try { recordLocalInterruption(activeOutcomeBinding(ctx.cwd), "scope_denied"); } catch { failOutcome(ctx); }
+		}
+	});
+
 	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext): Promise<ToolCallEventResult | undefined> => {
+		try {
+			if (outcomeFailure) return { block: true, reason: outcomeFailure };
+			const binding = activeOutcomeBinding(ctx.cwd);
+			const hold = getProviderHold(binding);
+			if (hold.blocked && !retryIsActive(binding, runtimeId)) return { block: true, reason: `Run held: ${hold.reason}; operator review required.` };
+		} catch { failOutcome(ctx); return { block: true, reason: outcomeFailure ?? "Outcome continuity unavailable." }; }
 		const engagement = getEngagement();
 		if (!engagement) return undefined;
 		const cfg = config();
@@ -256,7 +354,7 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 			// context usage unavailable (e.g. right after compaction) — skip this turn
 		}
 		const toolCallCount = engagement.repos.attempts.countByTarget(engagement.targetId);
-		const elapsed = (Date.now() - state.sessionStart) / 1000; // active run time, not target age
+		const elapsed = (Date.now() - state.sessionStart) / 1000; // durable run elapsed, including idle/provider interruption
 		await publishStatus(ctx.cwd, { contextTokensSeen: state.contextTokensSeen, toolCalls: toolCallCount, elapsed });
 		await publishRunSummary(ctx.cwd, engagement, "in_progress", elapsed, state.contextTokensSeen);
 		const caps = checkHardCaps(toolCallCount, elapsed, state.contextTokensSeen, {
@@ -349,9 +447,9 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 		const hasFoothold = engagement.repos.findings.hasValidatedFootholdClass(engagement.targetId, [...FOOTHOLD_CLASSES]);
 		const credCount = engagement.repos.credentials.listByTarget(engagement.targetId).length;
 		const fingerprint: ProgressFingerprint = {
-			milestone: hasRoot ? 2 : hasFoothold || credCount > 0 ? 1 : 0,
+				milestone: hasRoot ? 2 : hasFoothold ? 1 : 0,
 			candidates: cStatus.candidate,
-			validated: cStatus.validated,
+				validated: engagement.repos.findings.listByTarget(engagement.targetId).filter((f) => engagement.repos.findings.isValidatedTrustworthy(f.id)).length,
 			creds: credCount,
 			rootValidated: hasRoot ? 1 : 0,
 		};
@@ -374,6 +472,8 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_execution_end", async (event: ToolExecutionEndEvent, ctx: ExtensionContext) => {
+		try { recordCompletedTool(activeOutcomeBinding(ctx.cwd), { toolCallId: event.toolCallId, toolName: event.toolName, completedAt: new Date().toISOString(), isError: event.isError }); }
+		catch { failOutcome(ctx); return; }
 		// Only judge TARGET health from the vector that actually hits the target
 		// (shell tools). File reads, edits, and Pluto's own custom tools must not
 		// count — that is what caused false pauses (a skill file mentioning
@@ -399,6 +499,7 @@ export default function lifecycleExtension(pi: ExtensionAPI): void {
 				console.error("[pluto/lifecycle] failed to write pause file:", err);
 			}
 			state.unhealthyHits = 0;
+			try { recordLocalInterruption(activeOutcomeBinding(ctx.cwd), "environment_paused"); } catch { failOutcome(ctx); }
 			await logEvent(ctx.cwd, { kind: "environmental_pause", signal, reason });
 			console.error(`[pluto/lifecycle] ENGAGEMENT PAUSED — ${reason}. Operator: /unpause to continue.`);
 		}

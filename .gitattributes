@@ -1,0 +1,2 @@
+# Unified patches preserve literal context prefixes and blank lines.
+patches/pi/*.patch -whitespace

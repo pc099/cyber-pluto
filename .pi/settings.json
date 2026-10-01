@@ -3,6 +3,7 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.5",
   "extensions": [
+    "../extensions/src/engagement-binding/index.ts",
     "../extensions/src/tool-log/index.ts",
     "../extensions/src/red-lines/index.ts",
     "../extensions/src/recon/index.ts",

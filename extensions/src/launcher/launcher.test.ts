@@ -6,7 +6,10 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildPlan } from "./index.js";
+import { buildPlan, resolveSessionSelector } from "./index.js";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function plan(argv: string[]) {
 	const r = buildPlan(argv);
@@ -88,4 +91,36 @@ test("missing target is an error; unknown flag is an error", () => {
 	assert.equal(buildPlan([]).kind, "error");
 	assert.equal(buildPlan(["10.0.0.5", "--bogus"]).kind, "error");
 	assert.equal(buildPlan(["--help"]).kind, "help");
+});
+
+test("resume is explicit, preserves profile, and new sessions live in engagement workspace", () => {
+	const p = plan(["fixture.invalid", "--label", "named", "--session", "old.jsonl", "--adopt-session", "--headless"]);
+	assert.equal(p.session, "old.jsonl");
+	assert.equal(p.env.PLUTO_ADOPT_SESSION, "1");
+	assert.equal(p.env.PLUTO_LAUNCHER, "1");
+	assert.equal(p.env.PLUTO_SANDBOX_MODE, "disabled");
+	assert.equal(p.cliArgs[p.cliArgs.indexOf("--session-dir") + 1], "engagements/named/sessions");
+	assert.equal(p.cliArgs[p.cliArgs.indexOf("--session") + 1], "old.jsonl");
+	assert.match(p.cliArgs[p.cliArgs.indexOf("-p") + 1]!, /Resume the bound engagement/);
+	assert.equal(plan(["fixture.invalid"]).maxWall, 5400);
+	assert.equal(buildPlan(["fixture.invalid", "--adopt-session"]).kind, "error");
+	assert.equal(buildPlan(["fixture.invalid", "--label", "../other"]).kind, "error");
+});
+
+test("session selector resolves header-verified IDs and rejects ambiguous matches", () => {
+	const root = mkdtempSync(join(tmpdir(), "pluto-launch-resume-"));
+	const id = "00000000-0000-0000-0000-000000000001";
+	try {
+		const directory = join(root, "engagements/named/sessions");
+		mkdirSync(directory, { recursive: true });
+		const file = join(directory, `date_${id}.jsonl`);
+		writeFileSync(file, JSON.stringify({ type: "session", id }) + "\n");
+		assert.equal(resolveSessionSelector(id, root, join(root, "legacy")), file);
+		assert.equal(resolveSessionSelector(file, root, join(root, "legacy")), file);
+		const another = join(root, "legacy/another");
+		mkdirSync(another, { recursive: true });
+		writeFileSync(join(another, `date_${id}.jsonl`), JSON.stringify({ type: "session", id }) + "\n");
+		assert.throws(() => resolveSessionSelector(id, root, join(root, "legacy")), /2 matches/);
+		assert.throws(() => resolveSessionSelector("missing.jsonl", root, join(root, "legacy")), /not found/);
+	} finally { rmSync(root, { recursive: true, force: true }); }
 });

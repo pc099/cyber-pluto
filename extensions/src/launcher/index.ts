@@ -13,8 +13,10 @@
  * not left as untestable shell.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { canonicalPath } from "../state/session-binding.js";
 
 import { findCapability } from "../capabilities/manifest.js";
 
@@ -90,6 +92,8 @@ export interface LaunchPlan {
 	/** Operator-declared engagement class (default "web"). Drives launch-time
 	 * provisioning and PLUTO_ENGAGEMENT_CLASS (e.g. the forensics red-line exemption). */
 	domain: string;
+	session?: string;
+	adoptSession: boolean;
 	env: Record<string, string>;
 	cliArgs: string[];
 	briefing: string;
@@ -113,7 +117,7 @@ export function buildPlan(argv: string[]): ParseResult {
 	let attackProvider: string | undefined;
 	let attackModel: string | undefined;
 	let maxCalls = 200;
-	let maxWall = 3600;
+	let maxWall = 5400;
 	let maxTokens = 4_000_000;
 	let label = "";
 	let tunnel = false;
@@ -121,6 +125,8 @@ export function buildPlan(argv: string[]): ParseResult {
 	let headless = false;
 	let sandbox = false;
 	let domain = "web";
+	let session: string | undefined;
+	let adoptSession = false;
 	let program: string | undefined;
 	let trafficId: string | undefined;
 	let rate: string | undefined;
@@ -155,6 +161,8 @@ export function buildPlan(argv: string[]): ParseResult {
 				case "--headless": case "--auto": headless = true; break;
 				case "--sandbox": sandbox = true; break;
 				case "--domain": domain = next(); break;
+				case "--session": session = next(); break;
+				case "--adopt-session": adoptSession = true; break;
 				case "--dry-run": dryRun = true; break;
 				case "-h": case "--help": return { kind: "help" };
 				default:
@@ -197,6 +205,8 @@ export function buildPlan(argv: string[]): ParseResult {
 	if (first === undefined) return { kind: "error", message: "a target (or --scope/--scope-file) is required" };
 	if (!target) target = first;
 	if (!label) label = `engagement-${target.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+$/, "")}`;
+	if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(label) || label === "." || label === "..") return { kind: "error", message: "label must be one filesystem-safe name" };
+	if (adoptSession && !session) return { kind: "error", message: "--adopt-session requires --session PATH|ID and explicit target/scope inputs" };
 
 	const scopeCsv = [...new Set(scopeHosts)].join(",");
 	const objective = objectiveParts.join(" ");
@@ -218,6 +228,8 @@ export function buildPlan(argv: string[]): ParseResult {
 
 	// Env: the per-engagement dynamics (the harness stack itself comes from .pi/settings.json).
 	const env: Record<string, string> = {
+		PLUTO_LAUNCHER: "1",
+		PLUTO_SANDBOX_MODE: sandbox ? "requested" : "disabled",
 		PLUTO_TARGET_LABEL: label,
 		PLUTO_TARGET_HOST: target,
 		PLUTO_SCOPE_HOSTS: scopeCsv,
@@ -247,23 +259,26 @@ export function buildPlan(argv: string[]): ParseResult {
 	if (program) env.PLUTO_PROGRAM = program;
 	if (trafficId) env.PLUTO_TRAFFIC_ID = trafficId;
 	if (rate) env.PLUTO_RATE_LIMIT = rate;
+	if (adoptSession) env.PLUTO_ADOPT_SESSION = "1";
 
 	// CLI args: -a trusts the repo profile (.pi/settings.json = the stack); the
 	// launcher passes ONLY per-engagement dynamics, never the extension/skill set.
 	const cliArgs = [PI_CLI, "-a", "--no-context-files"];
+	cliArgs.push("--session-dir", `engagements/${label}/sessions`);
+	if (session) cliArgs.push("--session", session);
 	if (provider) cliArgs.push("--provider", provider);
 	if (model) cliArgs.push("--model", model);
 	cliArgs.push("--append-system-prompt", briefing);
 	if (headless) {
 		env.PLUTO_HEADLESS = "1"; // lifecycle turns an environmental pause into a terminal stop (no operator to /resume)
-		cliArgs.push("-p", `Begin the engagement against ${target} now. Start with recon.`);
+		cliArgs.push("-p", session ? `Resume the bound engagement against ${target}. Inspect recorded state before further actions.` : `Begin the engagement against ${target} now. Start with recon.`);
 	}
 
 	return {
 		kind: "plan",
 		plan: {
 			target, scopeHosts, scopeCsv, label, provider, model, attackProvider, attackModel,
-			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, sandbox, dryRun, domain,
+			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, sandbox, dryRun, domain, session, adoptSession,
 			env, cliArgs, briefing,
 		},
 	};
@@ -297,11 +312,13 @@ Options:
   --attack-provider P  Provider for the exploitation phase (phase routing)
   --attack-model NAME  Model for the exploitation phase
   --max-calls N        Tool-call hard cap (default 200; 0 = unlimited)
-  --max-wall SECONDS   Active wall-clock hard cap (default 3600; 0 = unlimited)
+  --max-wall SECONDS   Process elapsed hard cap (default 5400; 0 = unlimited)
   --max-tokens N       Context-token ceiling — a conservative over-estimate of
                        spend, not a bill (default 4000000; 0 = unlimited)
   --no-cap             Remove all hard caps
   --label NAME         Engagement label
+  --session PATH|ID    Resume one canonical Pi session with matching engagement inputs
+  --adopt-session      Explicitly associate an old unbound session; never promotes evidence
   --tunnel             Brief Pluto to use TCP-connect scans
   --program / --traffic-id / --rate   Bug-bounty compliance
   --headless           Run autonomously (no interactive shell)
@@ -315,6 +332,30 @@ Options:
 
 function repoRoot(): string {
 	return process.cwd();
+}
+
+/** Resolve IDs before launch, across engagement sessions and Pi's legacy store.
+ * A match is accepted only from a session header, never inferred from chat text. */
+export function resolveSessionSelector(selector: string, root: string, legacyDir = join(homedir(), ".pi/agent/sessions")): string {
+	if (existsSync(resolve(root, selector))) return canonicalPath(selector, root);
+	if (!/^[a-f0-9-]{36}$/i.test(selector)) throw new Error(`session path not found: ${selector}`);
+	const matches: string[] = [];
+	const scan = (directory: string, depth: number): void => {
+		if (!existsSync(directory)) return;
+		for (const entry of readdirSync(directory, { withFileTypes: true })) {
+			const path = join(directory, entry.name);
+			if (entry.isDirectory() && depth > 0) scan(path, depth - 1);
+			else if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(selector)) {
+				const header = JSON.parse(readFileSync(path, "utf8").split("\n", 1)[0] ?? "{}");
+				if (header.type === "session" && header.id === selector) matches.push(canonicalPath(path));
+			}
+		}
+	};
+	scan(join(root, "engagements"), 3);
+	scan(legacyDir, 2);
+	const unique = [...new Set(matches)];
+	if (unique.length !== 1) throw new Error(`session ID ${selector} has ${unique.length} matches; supply its exact path`);
+	return unique[0]!;
 }
 
 async function main(): Promise<void> {
@@ -359,6 +400,17 @@ async function main(): Promise<void> {
 	}
 
 	const childEnv = { ...process.env, ...plan.env };
+	// Never carry another process's active/delegate identity into a launcher run.
+	for (const key of ["PLUTO_ACTIVE_SESSION_FILE", "PLUTO_ACTIVE_SESSION_ID", "PLUTO_ACTIVE_BINDING_PATH", "PLUTO_PARENT_BINDING_PATH", "PLUTO_DELEGATE_ID"]) delete childEnv[key];
+	if (!plan.adoptSession) delete childEnv.PLUTO_ADOPT_SESSION;
+	for (const key of ["PLUTO_STATE_DIR", "PLUTO_LOG_DIR", "PLUTO_EVIDENCE_DIR"]) childEnv[key] = canonicalPath(childEnv[key]!, root);
+	const sessionDir = canonicalPath(`engagements/${plan.label}/sessions`, root);
+	plan.cliArgs[plan.cliArgs.indexOf("--session-dir") + 1] = sessionDir;
+	if (plan.session) {
+		try { plan.cliArgs[plan.cliArgs.indexOf("--session") + 1] = resolveSessionSelector(plan.session, root); }
+		catch (error) { process.stderr.write(`cyberpluto: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; return; }
+	}
+	mkdirSync(sessionDir, { recursive: true });
 
 	// Structural, class-driven provisioning BEFORE handoff (Increment 3).
 	provisionDomain(root, plan.domain);
