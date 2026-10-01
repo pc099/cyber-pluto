@@ -57,6 +57,25 @@ been rejected or blocked.
 
 ## Next steps for the harness
 
+**Update, 2026-10-01:** The operator's research-led task is complete for the three
+board-approved reliability slices. See Decision 0008 and the dated research memo.
+Strict verified-current predicates, post-UI transactional approvals, explicit
+session associations, guarded bootstrap, delegate inheritance, durable provider
+holds/recovery and generic Pi cancellation are implemented. Final extension suite
+184/184, actual SDK integration 8/8, Pi focused 9/9 + affected 60/60, build/check
+all passed. No live target or provider call occurred. Pi changes remain locally
+uncommitted under its nested instruction; the parent tracks their exact patch and
+fresh-checkout application/build instructions in `patches/pi/README.md`.
+
+Remaining next work is a board-reviewed sandbox startup/workspace proposal and
+local confinement/failure checks, followed by independent validation authority
+and process supervision. The forged passed-validation-row residual remains open;
+the current promotion signs an evidence reference, not independently established
+evidence truth. Outcome metadata is continuity data; cleanup/execution remain
+unknown after provider settlement, and token/no-progress counters are still
+process-local. No provider-access approval is established by this work.
+
+
 **Update, 2026-09-30:** The operator supplied a later Pi trace,
 `01a0d800-700c-74a0-ad83-4413dd373f75`. The board review in
 `docs/decisions/0007-last-jangow-run-review.md` establishes observed September 27

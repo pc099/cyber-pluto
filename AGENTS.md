@@ -59,8 +59,9 @@ four-role board; it does not replace a board vote or grant extra permissions.
 
 ## Current next task
 
-The latest Claude handoff identifies sandbox startup failure under `/root` as
-the next task. Review relocation of sandbox engagement workspaces outside
+Decision 0008 completes the research-led reliability slices; its final QA and
+portable Pi patch instructions are in the progress handoff. Sandbox startup
+failure under `/root` remains the next scoped task. Review relocation of sandbox engagement workspaces outside
 `/root`, migration of saved state, and coordination of the signing socket.
 Validate confinement, trusted promotion, resume behavior and failure cleanup
 before claiming the sandbox works. Do not present an unsandboxed run as proof

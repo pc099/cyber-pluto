@@ -1,7 +1,7 @@
 # Cyber Pluto
 
-Pluto is an autonomous cybersecurity testing harness with Claude as its
-reasoning core, forked from [Pi](https://github.com/earendil-works/pi). It
+Pluto is an autonomous cybersecurity testing harness built on a configurable
+reasoning provider, forked from [Pi](https://github.com/earendil-works/pi). It
 runs recon → validation → exploitation against a target, gated by two hard
 safety checkpoints. Phase 1 target is HackTheBox-style CTF boxes; Phase 2 is
 authorized bug-bounty programs (HackerOne/Bugcrowd) behind a mandatory human
@@ -43,16 +43,34 @@ you type instructions — or drive the engagement directly with the **console**:
 | `/report` | write a Markdown report for a finding |
 | `/resume` | clear an environmental pause and continue |
 | `/kill` | engage the kill switch (halt now) |
+| `/binding` | inspect the current session's engagement association |
+| `/provider-retry <reason>` | record one deliberate request after a provider policy hold |
 
 `!cmd` runs raw bash; `touch state/KILL_SWITCH` halts from any pane.
 
-## Choosing the provider / model
-
-Pluto's reasoning core is any model Pi supports. The launcher defaults to
-Anthropic Claude Haiku; switch with `--provider` (and optionally `--model`):
+Sessions now live in `engagements/<label>/sessions`. Resume with the same target,
+scope, label and signing configuration:
 
 ```bash
-./cyberpluto <target>                                   # default: anthropic / claude-haiku-4-5
+./cyberpluto <target> --label <name> --scope <target> --session <path-or-id>
+```
+
+An older unbound transcript additionally requires explicit `--adopt-session`.
+Adoption records an association; it does not validate its historical findings.
+Conflicting bindings and failed ledger startup block model input and tools.
+Root and foothold summaries require verified current attestations. Unsigned
+reproductions remain diagnostic records and cannot pass submission approval.
+
+For a fresh checkout, apply and build the tracked [Pi cancellation patch](patches/pi/README.md)
+before launching. The patch is already applied in the development checkout.
+
+## Choosing the provider / model
+
+The repository profile and launcher fallback currently select `openai-codex`
+with `gpt-5.5`. Switch with `--provider` and `--model`:
+
+```bash
+./cyberpluto <target>                                   # current profile: openai-codex / gpt-5.5
 ./cyberpluto <target> --provider openai-codex           # ChatGPT subscription (Codex OAuth), gpt-5.5
 ./cyberpluto <target> --provider openai --model gpt-5.5 # OpenAI API key (metered), pinned model
 ./cyberpluto <target> --model claude-opus-4-8           # a heavier Anthropic model
@@ -72,15 +90,16 @@ provider **once** before launching (credentials are stored by Pi, in `~/.pi`):
 > raw `OPENAI_API_KEY` is separate metered billing. Pick `openai-codex` to spend
 > the subscription.
 
-> **Codex refuses offensive-exploit work.** OpenAI's ChatGPT/Codex backend
-> server-side-flags exploitation content ("flagged for possible cybersecurity
-> risk") and stops — it needs their *Trusted Access for Cyber* program
-> (`chatgpt.com/cyber`). Until you have that, `openai-codex` is only usable for
-> recon/analysis, not the actual exploitation Pluto exists to do. **Anthropic is
-> the default** because Claude supports authorized security testing (CTF/HTB).
+Provider policy rejections can interrupt a run. Pluto preserves the original
+error, records the last completed tool, stops automatic continuation and retains
+the hold across restart. Review pending execution and cleanup separately:
+provider responsiveness does not establish either. `/provider-retry <reason>`
+records one operator recovery attempt; it does not change provider permissions.
+See the [dated research memo](docs/research/2026-09-30-harness-engineering.md)
+for official access documentation and differences between API and Codex surfaces.
 
-To make a provider the permanent default, change `PROVIDER=` (and `MODEL=`) at
-the top of the `cyberpluto` script.
+To change the configured default, edit `.pi/settings.json` and the launcher's
+fallbacks in `extensions/src/launcher/index.ts`.
 
 ## The two gates (non-negotiable)
 
@@ -110,6 +129,8 @@ pi/pi/                          # the Pi fork (git submodule)
 
 Run the tests: `cd extensions && npm test` (TypeScript) and
 `cd services && .venv/bin/python -m pytest` (Python).
+After building Pi and extensions, `npm run test:reliability` in `extensions`
+exercises the actual Pi SDK with a scripted provider and local file fixtures.
 
 ## The split stack
 
