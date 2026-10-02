@@ -19,6 +19,8 @@ import { homedir } from "node:os";
 import { canonicalPath } from "../state/session-binding.js";
 
 import { findCapability } from "../capabilities/manifest.js";
+import { runSandbox } from "./sandbox.js";
+import { SANDBOX_CONTROL, SANDBOX_ENGAGEMENTS, SANDBOX_RUNTIME } from "./sandbox-preflight.js";
 
 const PI_CLI = "pi/pi/packages/coding-agent/dist/bundle/cli.js";
 
@@ -50,25 +52,6 @@ function provisionDomain(root: string, domain: string): void {
 	if (cap.pip.length) spawnSync("pip", ["install", "--break-system-packages", ...cap.pip], { cwd: root, stdio: "inherit" });
 	process.stdout.write(verifyOk() ? `  provisioning  '${domain}' verified ✓\n` : `  provisioning: '${domain}' still fails verify — continuing; the agent may lack tools.\n`);
 }
-// Gate-1 privileged promotion signer (Item 0). The private key lives OUTSIDE the
-// pluto-readable harness tree (setup.sh installs it root-only); the daemon holds
-// it and the confined agent reaches it only through the socket + client.
-const PROMOTION_PRIVKEY_DEFAULT = "/etc/cyber-pluto/promotion_ed25519.key";
-const PROMOTION_DAEMON_JS = "extensions/dist/state/promotion-sign-daemon.js";
-const PROMOTION_CLIENT_JS = "extensions/dist/state/promotion-sign-client.js";
-
-/** Block (without async) until a path exists or the timeout elapses — used to
- * wait for the signing daemon's socket before starting the confined agent. */
-function waitForPathSync(path: string, timeoutMs = 5000): boolean {
-	const deadline = Date.now() + timeoutMs;
-	const pause = new Int32Array(new SharedArrayBuffer(4));
-	while (Date.now() < deadline) {
-		if (existsSync(path)) return true;
-		Atomics.wait(pause, 0, 0, 40);
-	}
-	return existsSync(path);
-}
-
 export interface LaunchPlan {
 	target: string;
 	scopeHosts: string[];
@@ -88,6 +71,7 @@ export interface LaunchPlan {
 	rate?: string;
 	headless: boolean;
 	sandbox: boolean;
+	sandboxCheck: boolean;
 	dryRun: boolean;
 	/** Operator-declared engagement class (default "web"). Drives launch-time
 	 * provisioning and PLUTO_ENGAGEMENT_CLASS (e.g. the forensics red-line exemption). */
@@ -124,6 +108,7 @@ export function buildPlan(argv: string[]): ParseResult {
 	let dryRun = false;
 	let headless = false;
 	let sandbox = false;
+	let sandboxCheck = false;
 	let domain = "web";
 	let session: string | undefined;
 	let adoptSession = false;
@@ -160,6 +145,7 @@ export function buildPlan(argv: string[]): ParseResult {
 				case "--rate": rate = next(); break;
 				case "--headless": case "--auto": headless = true; break;
 				case "--sandbox": sandbox = true; break;
+				case "--sandbox-check": sandbox = true; sandboxCheck = true; break;
 				case "--domain": domain = next(); break;
 				case "--session": session = next(); break;
 				case "--adopt-session": adoptSession = true; break;
@@ -206,6 +192,8 @@ export function buildPlan(argv: string[]): ParseResult {
 	if (!target) target = first;
 	if (!label) label = `engagement-${target.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+$/, "")}`;
 	if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(label) || label === "." || label === "..") return { kind: "error", message: "label must be one filesystem-safe name" };
+	if (sandbox && label.length > 48) return { kind: "error", message: "sandbox label must be at most 48 characters for the stable signing socket" };
+	if (sandbox && adoptSession) return { kind: "error", message: "sandbox adoption/conversion of historical sessions is unsupported; preserve source" };
 	if (adoptSession && !session) return { kind: "error", message: "--adopt-session requires --session PATH|ID and explicit target/scope inputs" };
 
 	const scopeCsv = [...new Set(scopeHosts)].join(",");
@@ -242,16 +230,16 @@ export function buildPlan(argv: string[]): ParseResult {
 		// targets never share one ledger (which accumulated stale-target rows).
 		// Control files, logs, and evidence stay at the repo root — run one
 		// engagement at a time (see state/db.ts stateDir docstring).
-		PLUTO_STATE_DIR: `engagements/${label}/state`,
+		PLUTO_STATE_DIR: sandbox ? `${SANDBOX_ENGAGEMENTS}/${label}/state` : `engagements/${label}/state`,
 		// Per-engagement, pluto-WRITABLE log dir. Under --sandbox the repo root is
 		// bind-mounted read-only, so a repo-root logs/ write fails silently and the
 		// audit + disclosure trail is lost; the engagement dir is writable + bound
 		// in, keeping "everything is logged" true in confined mode.
-		PLUTO_LOG_DIR: `engagements/${label}/logs`,
+		PLUTO_LOG_DIR: sandbox ? `${SANDBOX_ENGAGEMENTS}/${label}/logs` : `engagements/${label}/logs`,
 		// Same read-only-under-sandbox rationale as PLUTO_LOG_DIR: keep Gate-1
 		// evidence capture (validators, vision, exploit) writing to a pluto-writable
 		// per-engagement dir instead of the read-only repo-root evidence/.
-		PLUTO_EVIDENCE_DIR: `engagements/${label}/evidence`,
+		PLUTO_EVIDENCE_DIR: sandbox ? `${SANDBOX_ENGAGEMENTS}/${label}/evidence` : `engagements/${label}/evidence`,
 	};
 	if (model) env.PLUTO_SUBAGENT_MODEL = model;
 	if (attackProvider) env.PLUTO_ATTACK_PROVIDER = attackProvider;
@@ -264,12 +252,12 @@ export function buildPlan(argv: string[]): ParseResult {
 	// CLI args: -a trusts the repo profile (.pi/settings.json = the stack); the
 	// launcher passes ONLY per-engagement dynamics, never the extension/skill set.
 	const cliArgs = [PI_CLI, "-a", "--no-context-files"];
-	cliArgs.push("--session-dir", `engagements/${label}/sessions`);
+	cliArgs.push("--session-dir", sandbox ? `${SANDBOX_ENGAGEMENTS}/${label}/sessions` : `engagements/${label}/sessions`);
 	if (session) cliArgs.push("--session", session);
 	if (provider) cliArgs.push("--provider", provider);
 	if (model) cliArgs.push("--model", model);
 	cliArgs.push("--append-system-prompt", briefing);
-	if (headless) {
+	if (headless && !sandboxCheck) {
 		env.PLUTO_HEADLESS = "1"; // lifecycle turns an environmental pause into a terminal stop (no operator to /resume)
 		cliArgs.push("-p", session ? `Resume the bound engagement against ${target}. Inspect recorded state before further actions.` : `Begin the engagement against ${target} now. Start with recon.`);
 	}
@@ -278,7 +266,7 @@ export function buildPlan(argv: string[]): ParseResult {
 		kind: "plan",
 		plan: {
 			target, scopeHosts, scopeCsv, label, provider, model, attackProvider, attackModel,
-			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, sandbox, dryRun, domain, session, adoptSession,
+			maxCalls, maxWall, maxTokens, objective, tunnel, program, trafficId, rate, headless, sandbox, sandboxCheck, dryRun, domain, session, adoptSession,
 			env, cliArgs, briefing,
 		},
 	};
@@ -327,6 +315,7 @@ Options:
   --sandbox            Confine the agent: unprivileged 'pluto' uid, read-only
                        harness tree, nftables egress allowlist from scope (root;
                        run sandbox/setup.sh once first)
+  --sandbox-check      Check confined runtime/signing with local fixtures only; no Pi/model/target
   --dry-run            Print the resolved plan and exit
   -h, --help           This help`;
 
@@ -352,6 +341,7 @@ export function resolveSessionSelector(selector: string, root: string, legacyDir
 		}
 	};
 	scan(join(root, "engagements"), 3);
+	scan(SANDBOX_ENGAGEMENTS, 3);
 	scan(legacyDir, 2);
 	const unique = [...new Set(matches)];
 	if (unique.length !== 1) throw new Error(`session ID ${selector} has ${unique.length} matches; supply its exact path`);
@@ -384,23 +374,39 @@ async function main(): Promise<void> {
 		`  provider    ${plan.provider ?? "(profile default)"}\n` +
 		`  model       ${plan.model ?? "(profile default)"}\n` +
 		`  caps        ${capsCalls} · ${capsWall} · ${capsTok}\n` +
-		`  mode        ${plan.headless ? "headless (autonomous)" : "interactive shell"}\n` +
+		`  mode        ${plan.sandboxCheck ? "local readiness fixtures (no model/target)" : plan.headless ? "headless (autonomous)" : "interactive shell"}\n` +
 		`  profile     .pi/settings.json — the harness stack (trusted with -a)\n` +
+		(plan.sandbox ? `  runtime     ${SANDBOX_RUNTIME}\n` : "") +
 		`  label       ${plan.label}\n` +
 		(plan.attackProvider || plan.attackModel ? `  attack      ${plan.attackProvider ?? plan.provider ?? "default"} / ${plan.attackModel ?? plan.model ?? "default"}\n` : "") +
-		`  kill switch touch ${join(root, "state/KILL_SWITCH")}\n` +
+		`  kill switch touch ${plan.sandbox ? join(SANDBOX_CONTROL, "KILL_SWITCH") : join(root, "state/KILL_SWITCH")}\n` +
 		`  ---------------------------------------------------------------\n` +
 		`  Console: /pluto menu · /status /findings /nodes /creds · /approve (Gate 2) · /blocks /allow (red-line) · /kill\n\n`,
 	);
 
 	if (plan.dryRun) {
 		process.stdout.write(`[dry-run] env: ${Object.entries(plan.env).map(([k, v]) => `${k}=${v}`).join(" ")}\n`);
-		process.stdout.write(`[dry-run] launch: node ${plan.cliArgs.map((x) => (x.includes(" ") ? `'${x.slice(0, 40)}…'` : x)).join(" ")}\n`);
+		process.stdout.write(plan.sandboxCheck ? "[dry-run] readiness: confined local ledger/signing fixtures; no Pi/model/target invocation\n" : `[dry-run] launch: node ${plan.cliArgs.map((x) => (x.includes(" ") ? `'${x.slice(0, 40)}…'` : x)).join(" ")}\n`);
+		return;
+	}
+
+	if (plan.sandbox) {
+		try {
+			const selected = plan.session ? resolveSessionSelector(plan.session, root) : undefined;
+			const providerHosts = [
+				...(PROVIDER_HOSTS[plan.provider ?? "openai-codex"] ?? []),
+				...(plan.attackProvider ? PROVIDER_HOSTS[plan.attackProvider] ?? [] : []),
+				...(process.env.SHODAN_API_KEY ? INTEL_HOSTS.shodan ?? [] : []),
+			];
+			process.exitCode = await runSandbox(plan, selected, providerHosts);
+		} catch (error) {
+			process.stderr.write(`cyberpluto sandbox: ${error instanceof Error ? error.message : String(error)}\n`);
+			process.exitCode = 1;
+		}
 		return;
 	}
 
 	const childEnv = { ...process.env, ...plan.env };
-	// Never carry another process's active/delegate identity into a launcher run.
 	for (const key of ["PLUTO_ACTIVE_SESSION_FILE", "PLUTO_ACTIVE_SESSION_ID", "PLUTO_ACTIVE_BINDING_PATH", "PLUTO_PARENT_BINDING_PATH", "PLUTO_DELEGATE_ID"]) delete childEnv[key];
 	if (!plan.adoptSession) delete childEnv.PLUTO_ADOPT_SESSION;
 	for (const key of ["PLUTO_STATE_DIR", "PLUTO_LOG_DIR", "PLUTO_EVIDENCE_DIR"]) childEnv[key] = canonicalPath(childEnv[key]!, root);
@@ -411,98 +417,11 @@ async function main(): Promise<void> {
 		catch (error) { process.stderr.write(`cyberpluto: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; return; }
 	}
 	mkdirSync(sessionDir, { recursive: true });
-
-	// Structural, class-driven provisioning BEFORE handoff (Increment 3).
 	provisionDomain(root, plan.domain);
-
-	if (plan.sandbox) {
-		if (process.getuid?.() !== 0) {
-			process.stderr.write("cyberpluto --sandbox must be run as root (it applies the egress firewall and drops to the 'pluto' uid). Run sandbox/setup.sh first.\n");
-			process.exitCode = 1; return;
-		}
-		// 1. Apply the authoritative egress allowlist from OPERATOR scope + the
-		//    provider host(s), BEFORE the agent starts. pluto can't change it.
-		const providerHosts = PROVIDER_HOSTS[plan.provider ?? "openai-codex"] ?? [];
-		const attackHosts = plan.attackProvider ? (PROVIDER_HOSTS[plan.attackProvider] ?? []) : [];
-		// External-intel tool hosts (Shodan etc.): only allowed through egress when
-		// the tool's key is present, so an unused intel tool widens nothing.
-		const intelHosts = process.env.SHODAN_API_KEY ? (INTEL_HOSTS.shodan ?? []) : [];
-		const egress = spawnSync(join(root, "sandbox/egress.sh"), ["apply", plan.scopeHosts.join(" "), ...providerHosts, ...attackHosts, ...intelHosts], { stdio: "inherit" });
-		if (egress.status !== 0) { process.stderr.write("failed to apply egress allowlist; aborting.\n"); process.exitCode = 1; return; }
-		// 2. Inject the provider credential into the child env (never on disk,
-		//    never printed) — the confined `pluto` uid cannot read root's ~/.pi,
-		//    so root extracts the key here and passes it as the provider env var.
-		const keyEnv = PROVIDER_KEY_ENV[plan.provider ?? "openai-codex"];
-		if (keyEnv && !childEnv[keyEnv]) {
-			const k = spawnSync("node", [PI_CLI, "auth", "print-api-key", "--provider", plan.provider ?? "openai-codex"], { cwd: root, encoding: "utf8" });
-			const key = (k.stdout ?? "").trim();
-			if (k.status === 0 && key) childEnv[keyEnv] = key;
-			else process.stderr.write(`warning: could not extract a ${plan.provider ?? "openai-codex"} key to inject; the sandboxed agent may fail to authenticate.\n`);
-		}
-		// 3. Start the PRIVILEGED Gate-1 signing daemon as root, BEFORE dropping to
-		//    pluto. It holds the promotion private key (which lives outside the
-		//    pluto-readable tree) and listens on a socket in the pluto-writable
-		//    engagement dir. The confined agent reaches it via the client — never
-		//    sudo, which no_new_privs disables. If the key is absent the daemon is
-		//    skipped and promotions are recorded UNSIGNED (consumer enforcement
-		//    then treats them as untrusted); we warn loudly rather than fail.
-		const engDir = join(root, "engagements", plan.label);
-		mkdirSync(engDir, { recursive: true });
-		const privKey = process.env.PLUTO_PROMOTION_PRIVKEY ?? PROMOTION_PRIVKEY_DEFAULT;
-		const signSock = join(engDir, ".pluto-sign.sock");
-		let signDaemon: ReturnType<typeof spawn> | undefined;
-		if (existsSync(privKey)) {
-			// The daemon needs the key + the SAME state-dir view as the agent, but
-			// the child (pluto) env must NOT carry the private key.
-			const daemonEnv = { ...process.env, ...plan.env, PLUTO_PROMOTION_PRIVKEY: privKey, PLUTO_CWD: root };
-			signDaemon = spawn("node", [join(root, PROMOTION_DAEMON_JS), signSock], {
-				cwd: root, stdio: ["ignore", "ignore", "inherit"], env: daemonEnv,
-			});
-			if (!waitForPathSync(signSock)) {
-				process.stderr.write("promotion signing daemon did not come up; aborting (would run without Gate-1 signing).\n");
-				signDaemon.kill("SIGTERM");
-				spawnSync(join(root, "sandbox/egress.sh"), ["teardown"], { stdio: "ignore" });
-				process.exitCode = 1; return;
-			}
-			// Point the confined agent at the client (reached via the sync CMD
-			// signer). The key never enters the child env.
-			childEnv.PLUTO_PROMOTION_SIGNER_CMD = `${process.execPath} ${join(root, PROMOTION_CLIENT_JS)} ${signSock}`;
-			// Turn on consumer enforcement in the child: the PUBLIC key (world-read)
-			// lets it distrust an unsigned/invalid 'validated' finding at Gate-2.
-			const pubKey = privKey.replace(/\.key$/, ".pub");
-			if (existsSync(pubKey)) childEnv.PLUTO_PROMOTION_PUBKEY = pubKey;
-		} else {
-			process.stderr.write(
-				`warning: promotion private key ${privKey} not found — running WITHOUT Gate-1 signing (promotions will be unsigned/untrusted). Run sandbox/setup.sh to generate it.\n`,
-			);
-		}
-		// 4. Run the agent confined (setpriv no_new_privs + bwrap + owner-match).
-		const child = spawn(join(root, "sandbox/run-sandboxed.sh"), [engDir, "--", "node", ...plan.cliArgs], {
-			cwd: root, stdio: "inherit", env: childEnv,
-		});
-		child.on("exit", (code) => {
-			signDaemon?.kill("SIGTERM");
-			spawnSync(join(root, "sandbox/egress.sh"), ["teardown"], { stdio: "ignore" });
-			process.exitCode = code ?? 0;
-		});
-		return;
-	}
 
 	const child = spawn("node", plan.cliArgs, { cwd: root, stdio: "inherit", env: childEnv });
 	child.on("exit", (code) => { process.exitCode = code ?? 0; });
 }
-
-/** Provider → the API host(s) to allow through the egress firewall (resolved +
- * pinned at launch by egress.sh). The scope target is added separately. */
-/** Provider → the env var Pi reads its key from, so the root launcher can inject
- * the stored credential into the confined child (which can't read root's ~/.pi). */
-const PROVIDER_KEY_ENV: Record<string, string> = {
-	anthropic: "ANTHROPIC_API_KEY",
-	openai: "OPENAI_API_KEY",
-	deepseek: "DEEPSEEK_API_KEY",
-	zai: "ZAI_API_KEY",
-	groq: "GROQ_API_KEY",
-};
 
 /** External-intel tool → the third-party API host(s) added to the egress
  * allowlist by the root launcher when that tool's key is configured (Decision

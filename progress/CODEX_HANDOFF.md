@@ -57,7 +57,48 @@ been rejected or blocked.
 
 ## Next steps for the harness
 
-**Latest assessment and board update, 2026-10-01:** Decision 0009 supersedes the
+**Latest resume update, 2026-10-02:** Decisions 0009/0010 bounded sandbox
+implementation and local acceptance are COMPLETE. All four delegated board roles
+approved after sequential review/huddle and independent empirical QA. The
+operator requests one reviewer and one heavy task at a time on the 4 GB host;
+extension tests now default to one worker. Canonical sanitized `/opt/cyber-pluto`,
+writable `/var/lib` workspaces, protected signer/STOP controls, no-model readiness,
+unchanged-association resume/holds and conservative production resource ownership
+are implemented. Strict sandbox signing uses a persistent confined unprivileged
+SQLite reader; root owns keys/signatures/control and performs no SQLite access.
+Reader schema/IPC failures refuse; production dispatch retains owned firewall,
+lock and recovery marker until explicit root recovery before another launch/resume.
+
+Guarded deployed checks passed actual confinement/signing, all 13 source
+extensions, cold WAL, resume/trust/provider holds, pause/retry/STOP/delegate paths,
+startup SIGTERM and conflict refusal. Independent QA passed nine reader cases,
+12 denied `/proc` alternate reads and both local production retention/recovery
+fixtures. Fresh serial suites: extensions 234/234, Pi settings 58/58, actual SDK
+9/9. Pi static checks and browser smoke passed; initial monorepo typecheck was
+SIGKILLed, constrained retry exited 0 but peaked around 1.5 GB RSS. No target or
+live provider call. Evidence: `progress/sessions/2026-10-02-sandbox-qa.md`.
+
+**Resume here:** preserve the tested canonical runtime and historical ICA1
+records. Next engineering work requires a separate board proposal for independent
+validation authority/forged passed rows or stronger process supervision/recovery.
+The reader shares Pluto's UID; signatures still do not establish evidence truth.
+Bound-v1 migration, KB provisioning, persistent cap counters and ICA1 cleanup
+debt remain open. Review cleanup debt before another target evaluation; no target
+launch is authorized by readiness/setup. Root recovery must preserve descriptors,
+provider holds and trust qualification. Do not restart the original build plan.
+
+**Publication checkpoint, 2026-10-02:** The operator authorized committing and
+pushing the verified changes, then testing a new box. Pi settings fix
+`bc5378410` is committed and pushed to `pc099/pi` on `main`; this parent commit
+records the sandbox implementation and that submodule reference. Pi's automatic
+hook was skipped for this commit because its required check components had
+already passed separately, including the constrained typecheck. An earlier hook
+attempt restarted the unconstrained check and was explicitly stopped (exit 143).
+Operator reported repeated workspace discovery timeouts; no cause was established.
+Avoid broad discovery and repeated heavy checks. New target selection and scope
+remain pending; no new target/provider call has occurred.
+
+**Earlier assessment and board update, 2026-10-01:** Decision 0009 supersedes the
 earlier no-ICA1-run statement below. Session
 `01a0f7c0-f080-72e9-87a0-1512c5ea1adf` ran explicitly unsandboxed with correct
 ICA1 engagement binding and no signing. Recorded root execution and finding #8's
@@ -71,7 +112,7 @@ confinement checks, exposed disabled-bwrap fallback and passed 30 focused
 launcher/binding/trust tests in approved host context. Full repaired sandbox,
 signing integration and allowed/denied egress are not yet proven.
 
-**Resume here:** implement `docs/proposals/sandbox-startup-readiness.md` under
+**Historical resume point, superseded by October 2 above:** implement `docs/proposals/sandbox-startup-readiness.md` under
 Decision 0009: sanitized /opt runtime, /var/lib writable engagement and trusted
 controls, mask /root/private tmp, fail-closed no-model readiness, protected stable
 signer endpoint and owned global launch/firewall lifetime. First prove fresh

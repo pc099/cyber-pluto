@@ -3,6 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, linkSync, unlinkSync } from "node:fs";
 import { dirname, basename, resolve, join } from "node:path";
 import { getProviderHold } from "../lifecycle/provider-outcome.js";
+import { killSwitchPath } from "../red-lines/kill-switch.js";
 
 export interface EngagementAssociation {
 	label: string;
@@ -95,10 +96,13 @@ export function persistBinding(binding: SessionBinding): SessionBinding {
 	return existing;
 }
 
-export function assertParentMayRun(binding: SessionBinding, cwd: string): void {
-	for (const path of [join(cwd, "state/KILL_SWITCH"), join(cwd, "state/PAUSED"), join(binding.association.stateDir, "KILL_SWITCH"), join(binding.association.stateDir, "PAUSED")]) {
+export function assertControlMayRun(binding: SessionBinding, cwd: string, env: NodeJS.ProcessEnv = process.env): void {
+	for (const path of [killSwitchPath(cwd, env), join(cwd, "state/KILL_SWITCH"), join(cwd, "state/PAUSED"), join(binding.association.stateDir, "KILL_SWITCH"), join(binding.association.stateDir, "PAUSED")]) {
 		if (existsSync(path)) throw new SessionBindingError(`parent control stop is active (${path})`);
 	}
+}
+export function assertParentMayRun(binding: SessionBinding, cwd: string, env: NodeJS.ProcessEnv = process.env): void {
+	assertControlMayRun(binding, cwd, env);
 	const hold = getProviderHold(binding);
 	if (hold.blocked) throw new SessionBindingError(`parent stopped (${hold.reason})`);
 }
@@ -109,7 +113,7 @@ export function getActiveBinding(cwd: string, env: NodeJS.ProcessEnv = process.e
 		const parent = readBinding(env.PLUTO_PARENT_BINDING_PATH);
 		if (!env.PLUTO_DELEGATE_ID || !/^[A-Za-z0-9-]{1,96}$/.test(env.PLUTO_DELEGATE_ID)) throw new SessionBindingError("ephemeral delegate lacks valid explicit identity");
 		if (!associationEqual(parent.association, association)) throw new SessionBindingError("delegate configuration differs from parent");
-		assertParentMayRun(parent, cwd);
+		assertParentMayRun(parent, cwd, env);
 		return parent;
 	}
 	const file = required(env, "PLUTO_ACTIVE_SESSION_FILE");

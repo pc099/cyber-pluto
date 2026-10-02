@@ -1,119 +1,143 @@
-# Sandbox — agent confinement (board-ratified v0)
+# Sandbox deployment and local readiness
 
-This closes the two escalated security items: the agent **cannot modify the
-harness's own trusted files** (so an injected write can't disable the red-lines
-gate), and the scope control is an **authoritative network-egress allowlist**,
-not command-text parsing.
+Decision 0009 uses an independently deployed, root-owned runtime at
+`/opt/cyber-pluto`. Development remains in `/root/cyber-pluto`; setup never
+binds or recursively freezes that checkout. A manifest covers the selected
+runtime, source extensions, compiled tools, production dependencies and Python
+services. Source sessions, credentials and legacy state are excluded.
 
-Decided by a 3-agent review board (harness-architect, cybersecurity, griller)
-in a huddle — **unanimously ratified**. The board rejected a container for v0
-(Docker fights this box's `iptables-nft` backend + libvirt's `virbr0` rules,
-OOMs a swapless 3.8 GB box under chromium/KVM, and can't IP-pin the CDN
-provider) in favor of the mechanism validated on this box.
+## Setup
 
-## The model
-
-The agent runs as a **dedicated unprivileged uid `pluto`**, and:
-
-1. **Read-only harness tree** — the whole runtime (repo, `extensions/dist`,
-   `node_modules`, the `pi/` bundle, `.pi/`, `runtime-skills/`, `node`) is
-   root-owned and world-read-only, so `pluto` can execute + read but not write.
-   An injected `echo > extensions/src/red-lines/check.ts` gets `EROFS`/EACCES.
-   Only `engagements/<label>/` and `/tmp` are writable.
-2. **`no_new_privs`** (via `setpriv`) — a setuid-root tool (e.g. `ping`) cannot
-   elevate, so its packets are attributed to `pluto` and caught by the egress
-   filter. This closes the setuid egress-attribution bypass. It also blocks the
-   LPE-to-root path (`pkexec`/`sudo` can't elevate).
-3. **bubblewrap** — read-only bind of the fs, writable bind of only the
-   engagement workspace + `/tmp`, minimal `/dev`+`/proc`.
-4. **Authoritative egress** — an `nftables` `meta skuid pluto` **default-DROP**
-   OUTPUT allowlist, applied by the ROOT launcher *before* the agent starts,
-   from **operator scope only**: allow the in-scope target hosts, the LLM
-   provider endpoint(s), loopback, and DNS to one resolver; DROP everything
-   else. It lives in root's ruleset, so `pluto` (no `CAP_NET_ADMIN`) can't flush
-   it, and it never touches root/operator/VPN traffic. Verified on the box:
-   `pluto` reached an allowed IP, was DROPPED to a disallowed one, root
-   unaffected. Every child tool and sub-agent inherits the filter automatically.
-5. **Credentials** — the root launcher **env-injects** the provider API key into
-   the dropped-uid child; it lives only in that process's `/proc/<pid>/environ`
-   (0400, root+pluto), never on disk. Root's `~/.pi` stays `700`. Use a
-   rotatable/scoped key.
-6. **Kill switch** — stays root-owned `state/KILL_SWITCH`; the operator writes
-   it, `pluto` read-only-polls it, and it is now **un-deletable by the agent**.
-7. **`provision_capability` is verify-only** — tools are pre-baked; the agent
-   has no writable system dirs and no package-repo egress.
-
-## One-time setup
-
-The harness must live **outside `/root`** (which is `0700`, so `pluto` can't
-even traverse into it). `setup.sh` deploys it to a traversable path and freezes
-it:
+Build the extensions first, then explicitly deploy an absent destination:
 
 ```bash
-cd /root/cyber-pluto/extensions && npm run build      # build as root FIRST (frozen tree can't build)
+cd /root/cyber-pluto/extensions
+npm run build
 sudo /root/cyber-pluto/sandbox/setup.sh /opt/cyber-pluto
+sudo /opt/cyber-pluto/cyberpluto 127.0.0.1 --label readiness --sandbox-check
 ```
 
-## Run a confined engagement
+Setup is offline: install prerequisites separately. It prepares the dedicated
+`pluto` UID, protected directories and matching Ed25519 keys. Existing keys are
+preserved and verified; partial or unsafe keypairs are refused. Setup never
+starts a target engagement. `--sandbox-check` runs disposable local confinement
+and signing fixtures with no Pi, model or target invocation. It does not test
+the full extension profile or independently establish validation evidence.
+
+All sandbox launches use the **canonical `/opt/cyber-pluto` runtime**, including
+launches from the development checkout or an alternate deployment. Alternate
+runtime destinations are staging/QA snapshots, not activation. Setup refuses
+an existing destination. For an update, root must first verify no Pluto UID
+workloads, launch lock, recovery hold or Pluto egress policy remain; preserve
+and rename the old canonical runtime to an absent backup path, then deploy the
+new snapshot at the canonical path and repeat readiness. Do not edit deployed
+files or replace a runtime during a run. Saved sessions are association-bound;
+this procedure preserves the canonical pathname, not an arbitrary relocation.
+
+## Paths and controls
+
+| Resource | Location |
+| --- | --- |
+| Writable workspace | `/var/lib/cyber-pluto/engagements/<label>/` |
+| Session history | workspace `sessions/` |
+| State, evidence and audit | workspace `state/`, `evidence/`, `logs/` |
+| Pi agent configuration | workspace `pi-agent/` |
+| Operator stop | `/var/lib/cyber-pluto/control/KILL_SWITCH` |
+| Protected signer | `/run/cyber-pluto/signers/<label>/promotion.sock` |
+| Exclusive launch lock | `/run/cyber-pluto/launch.lock/` |
+| Unconfirmed cleanup marker | `/var/lib/cyber-pluto/control/RECOVERY_REQUIRED.json` |
+| Private/public keys | `/etc/cyber-pluto/promotion_ed25519.key` / `.pub` |
+
+The wrapper requires bubblewrap and drops to `pluto` with `no_new_privs`.
+Host mounts and runtime are read-only, `/root` is masked, `/tmp` is private,
+and the selected workspace is writable. Disabling bubblewrap is refused.
+The public key must remain readable and visible inside the sandbox; the private
+key is root-only and excluded from the agent environment.
+
+The operator may stop a run with `sudo touch
+/var/lib/cyber-pluto/control/KILL_SWITCH`. Confirmed `/kill` sends a bounded
+monotonic stop request to the root signer; the daemon writes its configured
+control path. The agent cannot choose another path or remove the sentinel.
+Parent and delegate guards honor it. Clear a root stop only after inspecting
+workloads and state; a UI stop is not proof that detached commands ended.
+
+An nftables OUTPUT allowlist applies to Pluto UID traffic, allowing scoped
+hosts, resolved provider addresses, loopback and the configured resolver.
+Each table records a launch owner; a different launch cannot replace or remove
+it. Launches serialize globally. After a production spawn attempt, cleanup stops
+owned handles and retains the policy, lock and recovery marker because a process
+inventory cannot prove that arbitrary descendants ended. Explicit root recovery
+is required before another launch or resume: independently confirm quiescence,
+inspect the recorded run owner and remove only its resources. Preserve session
+descriptors, provider holds and trust qualification during recovery.
+Controlled no-model readiness probes may remove owned protection after verified
+process termination and observed UID quiescence. Unknown termination or cleanup
+failure retains resources. Root must inspect and recover those resources; there
+is no automatic stale-lock deletion or unconfined fallback.
+
+## Resume and credentials
+
+Fresh confined sessions can reopen with the same label, target, scope, canonical
+paths and signing configuration using `--session <path-or-id>`. Preflight checks
+the selected branch against its durable descriptor without rewriting history.
+Historical bound-v1 sessions under `/root` cannot be relocated, converted or
+adopted by this launcher. Preserve them; migration is separate work.
+
+Provider holds persist across resume. Interactive diagnostics allow the operator
+to use `/provider-retry <reason>` for one deliberate request while normal input
+and tools remain held. A saved environmental pause can similarly reopen only a
+valid same-association interactive session for `/unpause`; headless/readiness
+starts cannot bypass it. Hard caps and protected root stops stay authoritative.
+
+Supported API-key providers use explicit environment credentials. For
+`openai-codex`, root reads only an existing private operator OAuth access token,
+passes it through the environment and requires enough validity for the finite
+wall cap plus five minutes. No refresh token, credential-file persistence or
+automatic login is used. Expired credentials require operator refresh first.
+The token remains visible to the agent that uses it; provider-channel isolation
+is not claimed.
+
+## Evidence and limits
+
+The root signer pins the canonical ledger/ancestor identities and owns the key.
+Strict sandbox mode routes all SQLite access through a persistent confined
+unprivileged reader with a retained ledger handle, fixed queries and bounded
+typed correlated IPC. The reader receives no keys or provider credentials.
+Reader exit, timeout or invalid replies refuse service without root SQLite
+fallback. Health signatures use a separate domain and bind the
+ledger, launch, fresh challenge and verifying key. Stale sockets and replaced
+ledgers are refused. Unsigned/directly flipped validated rows do not establish
+verified current facts or Gate 2 eligibility.
+
+**Forged passed-validation rows remain open:** the agent can write validation
+rows and obtain a signature. Signing establishes provenance, not independent
+evidence truth. Evidence, audit and outcome files remain mutable continuity data.
+The reader shares Pluto's UID and is susceptible to same-UID manipulation; its
+process and IPC are not an independent validation authority.
+
+The mount scheme does not provide general host read isolation or confidentiality
+between external engagements sharing the Pluto UID. Kernel escapes, detached
+process supervision and persistent token/no-progress counters remain separate
+work. Runtime service imports do not prove usable KB retrieval: legacy KB state
+is deliberately excluded and its existing default is not provisioned in the
+read-only runtime. Resolve KB provisioning before relying on retrieval in a
+new evaluation. Local fixtures do not establish success on a target box.
+
+## Explicit local QA
+
+Build and deploy the canonical runtime first. Run these root-host fixtures
+sequentially from the checkout; they refuse or preserve conflicting resources
+and use disposable local data. The full-profile fixture uses an in-memory
+provider and refuses network fetches. Boundary production payloads are fixed
+local probes with synthetic credentials, so they make no provider requests.
 
 ```bash
-cd /opt/cyber-pluto
-sudo ./cyberpluto <target> --sandbox --headless        # applies egress from scope, drops to pluto
-# halt:  sudo touch /opt/cyber-pluto/state/KILL_SWITCH
+sudo python3 extensions/test/sandbox-profile-qa.py
+sudo python3 extensions/test/sandbox-startup-qa.py
+sudo python3 extensions/test/sandbox-boundary-qa.py reader
+sudo python3 extensions/test/sandbox-boundary-qa.py production
 ```
 
-`--sandbox` (root) applies `sandbox/egress.sh` from the resolved scope +
-provider, then runs the agent via `sandbox/run-sandboxed.sh`. Tearing down the
-run removes the egress table.
-
-## Scripts
-
-- `setup.sh` — create `pluto`, deploy to a traversable path, freeze the tree,
-  and generate the Gate-1 promotion signing keypair (see below).
-- `egress.sh apply "<scope hosts/CIDRs>" [provider_host…]` / `teardown` / `show`.
-- `run-sandboxed.sh <engagement_dir> -- <cmd…>` — the privilege-drop + bwrap wrapper.
-
-## Gate-1 promotion signing (Item 0)
-
-The state DB is `pluto`-writable, so a hijacked agent could forge a validated
-finding with a raw `UPDATE findings SET status='validated'`. To make that inert,
-every legitimate `candidate→validated` promotion is signed with an ed25519 key
-**held by root, outside pluto's reach**, and consumers treat an unsigned/invalid
-`validated` row as tampered.
-
-- `setup.sh` generates the keypair: the **private** key at
-  `/etc/cyber-pluto/promotion_ed25519.key` (root-only `0400`), the **public** key
-  at `…/promotion_ed25519.pub` (`0444`).
-- Under `--sandbox` the launcher starts a **root signing daemon**
-  (`promotion-sign-daemon`) before dropping to `pluto`. It holds the private key
-  and listens on a unix socket in the pluto-writable engagement dir; the confined
-  agent reaches it via `promotion-sign-client`. A socket — **not sudo** — is used
-  because the sandbox runs under `no_new_privs`, which disables setuid (hence
-  sudo). The daemon re-derives the claim from the DB and re-verifies the gate as
-  root before signing.
-- **Verified live on the box:** under `no_new_privs`, `pluto` gets *Permission
-  denied* on the private key but *can* obtain a valid signature through the
-  socket; the daemon refuses a claim for a missing/failing validation.
-- **Honest residual:** the `validations` table is also pluto-writable, so a
-  hijacked agent can forge a `passed` validation row and then obtain a legitimate
-  signature for it. This closes the direct status-flip, not the
-  forged-validation-row path — that needs privileged re-validation (Item-0
-  follow-on). Consumer enforcement (readers demoting unsigned/invalid `validated`
-  findings) is the remaining increment.
-
-## Residual risks (on record, accepted for v0)
-
-- **Kernel LPE** — a kernel exploit escapes any uid/namespace boundary (a
-  container wouldn't stop a kernel escape either). Deferred defense-in-depth:
-  seccomp/AppArmor + a mount namespace hiding host secrets (Milestone-2).
-- **Provider channel** — the agent must reach the LLM API and can encode data
-  into prompts (and read its own key). Bounded by a rotatable key, volume
-  logging, and the Gate-2 human submission gate.
-- **DNS tunnel** — the one allowed resolver is a low-bandwidth covert channel;
-  it logs every query and targets need no DNS.
-
-## Deferred to Milestone-2 (reproducibility + defense-in-depth)
-
-A reproducible container image (nspawn, not Docker on this box), a mount
-namespace for read-confinement of host secrets, seccomp/AppArmor, and DNS-set
-population of the provider allowlist by the controlled resolver.
+Production-retention checks intentionally retain owned policy/lock/marker,
+verify refusal of another launch, then perform explicit fixture-owned recovery.
+These tests do not authorize an engagement or provide general process supervision.

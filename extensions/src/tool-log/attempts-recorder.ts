@@ -26,15 +26,16 @@ const pendingAttemptIds = new Map<string, number>();
  * masked wherever they resurface in logs/evidence (a recovered password reused
  * in a later command has no reliable "shape" for pattern-only redaction). */
 export function knownSecrets(): string[] {
+	const injected = [process.env.PLUTO_CODEX_ACCESS_TOKEN].filter((s): s is string => typeof s === "string" && s.length >= 3);
 	const engagement = getEngagement();
-	if (!engagement) return [];
+	if (!engagement) return injected;
 	try {
-		return engagement.repos.credentials
+		return injected.concat(engagement.repos.credentials
 			.listByTarget(engagement.targetId)
 			.map((c) => c.secret)
-			.filter((s): s is string => typeof s === "string" && s.length >= 3);
+			.filter((s): s is string => typeof s === "string" && s.length >= 3));
 	} catch {
-		return [];
+		return injected;
 	}
 }
 

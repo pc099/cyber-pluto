@@ -1,13 +1,13 @@
 /** First guard: startup exceptions alone do not block Pi's built-in tools. */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { bindSession, getActiveBinding } from "../state/session-binding.js";
+import { assertControlMayRun, bindSession, getActiveBinding } from "../state/session-binding.js";
 import { startEngagement, resetEngagement } from "../state/engagement.js";
 
 export default function engagementBindingExtension(pi: ExtensionAPI): void {
 	let startupFailure: string | undefined;
 	const failure = (ctx: ExtensionContext): string | undefined => {
 		if (startupFailure) return startupFailure;
-		try { getActiveBinding(ctx.cwd); return undefined; }
+		try { assertControlMayRun(getActiveBinding(ctx.cwd), ctx.cwd); return undefined; }
 		catch (e) { return e instanceof Error ? e.message : String(e); }
 	};
 	pi.on("session_start", (event, ctx) => {

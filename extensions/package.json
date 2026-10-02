@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "hello": "npm run build && node dist/hello.js",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --test --test-concurrency=1 dist/**/*.test.js",
     "test:reliability": "node --test --test-isolation=none --test-reporter=tap test/reliability.integration.mjs"
   },
   "dependencies": {

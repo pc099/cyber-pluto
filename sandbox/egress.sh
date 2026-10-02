@@ -32,9 +32,35 @@ resolve_ips() { # host -> its A records, one per line
 	getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u
 }
 
-cmd_teardown() { nft delete table inet pluto_egress 2>/dev/null || true; echo "egress: pluto allowlist removed"; }
+# A launcher-owned token prevents one run from removing another run's table.
+owner_token() {
+	[[ "${PLUTO_EGRESS_RUN_ID:-}" =~ ^[A-Za-z0-9-]{1,128}$ ]] || { echo "egress: explicit launch ownership token required" >&2; return 1; }
+}
+# Output the table owner, or return 2 only for an explicitly absent table.
+table_owner() {
+	local output
+	if output="$(nft -j list table inet pluto_egress 2>&1)"; then
+		printf '%s' "$output" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{const t=JSON.parse(s).nftables.find(x=>x.table?.family==="inet"&&x.table?.name==="pluto_egress");if(!t)process.exit(1);process.stdout.write(t.table.comment??"")})'
+	elif [[ "$output" == *"No such file or directory"* ]]; then
+		return 2
+	else
+		echo "egress: cannot establish table ownership/absence" >&2; return 3
+	fi
+}
+cmd_teardown() {
+	owner_token || return 1
+	local owner status=0
+	owner="$(table_owner)" || status=$?
+	[[ "$status" == 2 ]] && { echo "egress: owned table already absent"; return 0; }
+	[[ "$status" == 0 && "$owner" == "pluto-run:$PLUTO_EGRESS_RUN_ID" ]] || { echo "egress: refusing teardown of an unowned/unknown table" >&2; return 1; }
+	nft delete table inet pluto_egress || return 1
+	status=0; owner="$(table_owner)" || status=$?
+	[[ "$status" == 2 ]] || { echo "egress: teardown not verified; recovery required" >&2; return 1; }
+	echo "egress: owned allowlist removed"
+}
 
 cmd_apply() {
+	owner_token || return 1
 	local scope="$1"; shift || true
 	local providers=("$@")
 	id "$UIDNAME" >/dev/null 2>&1 || { echo "user '$UIDNAME' does not exist (run sandbox/setup-user.sh)" >&2; exit 1; }
@@ -50,9 +76,12 @@ cmd_apply() {
 	[[ ${#allowed[@]} -eq 0 ]] && { echo "refusing to apply an empty allowlist (no scope)" >&2; exit 1; }
 	local set_elems; set_elems="$(printf '%s, ' "${allowed[@]}")"; set_elems="${set_elems%, }"
 
-	cmd_teardown
+	local existing status=0
+	existing="$(table_owner)" || status=$?
+	[[ "$status" == 2 ]] || { echo "egress: refusing to replace an existing/unknown table" >&2; return 1; }
 	nft -f - <<NFT
 table inet pluto_egress {
+  comment "pluto-run:${PLUTO_EGRESS_RUN_ID}"
   set allowed {
     type ipv4_addr
     flags interval

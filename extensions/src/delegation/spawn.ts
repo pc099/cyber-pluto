@@ -36,7 +36,7 @@ function ext(name: string): string {
 }
 
 /** Every specialist gets continuity, scope, audit and interruption guards first. */
-const ALWAYS: readonly string[] = [ext("engagement-binding"), ext("red-lines"), ext("tool-log"), ext("lifecycle")];
+const ALWAYS: readonly string[] = [ext("engagement-binding"), ext("red-lines"), ext("sandbox-auth"), ext("tool-log"), ext("lifecycle")];
 
 const SPECIALIST_EXTRA: Record<string, string[]> = {
 	// Full-handoff exploitation specialist: owns a validated finding through
@@ -142,7 +142,7 @@ export async function spawnSubAgent(
 /** Ephemeral children must explicitly inherit a validated parent descriptor. */
 export function buildSubAgentEnv(cwd: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const binding = getActiveBinding(cwd, env);
-	assertParentMayRun(binding, cwd);
+	assertParentMayRun(binding, cwd, env);
 	if (env.PLUTO_DELEGATE_ID) {
 		const ownHold = getProviderHold({ sessionId: env.PLUTO_DELEGATE_ID, sessionFile: `${binding.sessionFile}.delegate-${env.PLUTO_DELEGATE_ID}` });
 		if (ownHold.blocked) throw new Error(`Delegation blocked: calling specialist is held (${ownHold.reason})`);
@@ -152,5 +152,6 @@ export function buildSubAgentEnv(cwd: string, env: NodeJS.ProcessEnv = process.e
 	delete child.PLUTO_ACTIVE_SESSION_ID;
 	delete child.PLUTO_ACTIVE_BINDING_PATH;
 	delete child.PLUTO_ADOPT_SESSION;
+	delete child.PLUTO_PROMOTION_PRIVKEY;
 	return child;
 }

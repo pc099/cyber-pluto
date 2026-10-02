@@ -38,6 +38,7 @@ import { appendGrant, consumeMatchingGrant, readPendingBlocks, recordPendingBloc
 import { checkRedLines, toInvocation } from "./check.js";
 import { isKillSwitchEngaged, killSwitchPath } from "./kill-switch.js";
 import { getEngagement, startEngagement } from "../state/engagement.js";
+import { logDir } from "../state/db.js";
 import { normalizeHost, parseScopeHosts, resolveVhosts } from "./rules.js";
 
 // Session-bound so a grant can NEVER carry into a later session (a stale grant
@@ -45,7 +46,6 @@ import { normalizeHost, parseScopeHosts, resolveVhosts } from "./rules.js";
 // the `/allow` console command runs in this same process, so it shares this id.
 const SESSION_ID = randomUUID();
 
-const LOG_DIR = "logs";
 const LOG_FILE = "red-lines.jsonl";
 const MAX_LOGGED_COMMAND = 2000;
 
@@ -75,8 +75,9 @@ function resolveScopeHosts(): Set<string> {
 async function logBlock(cwd: string, entry: Record<string, unknown>): Promise<void> {
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;
 	try {
-		await mkdir(join(cwd, LOG_DIR), { recursive: true });
-		await appendFile(join(cwd, LOG_DIR, LOG_FILE), line, "utf8");
+		const directory = logDir(cwd);
+		await mkdir(directory, { recursive: true });
+		await appendFile(join(directory, LOG_FILE), line, "utf8");
 	} catch (err) {
 		// Never let a logging failure swallow the fact that a block happened.
 		console.error("[pluto/red-lines] BLOCK (log write failed):", line, err);

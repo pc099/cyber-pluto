@@ -52,6 +52,10 @@ Custom role files are in `.codex/agents/`. If this session cannot select those
 files natively, read their instructions and pass them to delegated agents.
 Leave models, permissions and concurrency inherited from the active environment.
 
+The operator's 4 GB host requires sequential work: run one board reviewer at a
+time and one heavy build, test or QA task at a time. Use one test worker; do not
+overlap browser fixtures or run duplicate suites in the background.
+
 For requested research-led harness work, use `pluto-harness-researcher` and
 `.agents/skills/pluto-harness-research/SKILL.md`. The researcher has inherited web
 tools, grounds proposals in primary sources and Pluto evidence, and advises the
@@ -59,10 +63,12 @@ four-role board; it does not replace a board vote or grant extra permissions.
 
 ## Current next task
 
-Decision 0008 completes the research-led reliability slices; its final QA and
-portable Pi patch instructions are in the progress handoff. Sandbox startup
-failure under `/root` remains the next scoped task. Review relocation of sandbox engagement workspaces outside
-`/root`, migration of saved state, and coordination of the signing socket.
-Validate confinement, trusted promotion, resume behavior and failure cleanup
-before claiming the sandbox works. Do not present an unsandboxed run as proof
-of sandbox operation or automatically launch a target engagement during setup.
+Decisions 0009/0010 complete bounded sandbox startup/readiness and local QA;
+see the latest handoff and `progress/sessions/2026-10-02-sandbox-qa.md`. Strict
+sandbox signing uses a confined unprivileged reader; production dispatch retains
+owned protection until explicit root recovery. Independent validation authority,
+forged passed rows, general process supervision/recovery tooling, migration and
+KB provisioning remain open. Review a separate concrete board proposal before
+the next consequential slice, and ICA1 cleanup debt before any target evaluation.
+Do not present an unsandboxed run as proof of sandbox operation or automatically
+launch a target engagement during setup.

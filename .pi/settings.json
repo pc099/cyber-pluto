@@ -6,6 +6,7 @@
     "../extensions/src/engagement-binding/index.ts",
     "../extensions/src/tool-log/index.ts",
     "../extensions/src/red-lines/index.ts",
+    "../extensions/src/sandbox-auth/index.ts",
     "../extensions/src/recon/index.ts",
     "../extensions/src/validators/index.ts",
     "../extensions/src/vision/index.ts",

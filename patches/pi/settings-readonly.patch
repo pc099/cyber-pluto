@@ -1,0 +1,149 @@
+diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+index a1f0789b1..692aa370b 100644
+--- a/packages/coding-agent/CHANGELOG.md
++++ b/packages/coding-agent/CHANGELOG.md
+@@ -14,6 +14,7 @@
+ 
+ ### Fixed
+ 
++- Read existing settings on read-only filesystems without requiring a writable lock directory; writes still require a lock.
+ - Capped agent-level retry backoff at `retry.maxAgentDelayMs` (60s by default) so long retry runs stay responsive during prolonged transient outages ([#8826](https://github.com/earendil-works/pi/issues/8826)).
+ - Fixed direct RPC `steer` and `follow_up` commands bypassing extension `input` handlers ([#8718](https://github.com/earendil-works/pi/issues/8718)).
+ - Fixed premature missing-model errors after login by waiting for catalog discovery. Radius now defaults to `balanced`, falling back to the first available Radius model when needed.
+diff --git a/packages/coding-agent/src/core/settings-manager.ts b/packages/coding-agent/src/core/settings-manager.ts
+index a74b23ad0..ff1c249f6 100644
+--- a/packages/coding-agent/src/core/settings-manager.ts
++++ b/packages/coding-agent/src/core/settings-manager.ts
+@@ -265,15 +265,28 @@ export class FileSettingsStorage implements SettingsStorage {
+ 		const dir = dirname(path);
+ 
+ 		let release: (() => void) | undefined;
++		let readOnlyLockError: unknown;
+ 		try {
+ 			// Only create directory and lock if file exists or we need to write
+ 			const fileExists = existsSync(path);
+ 			if (fileExists) {
+-				release = this.acquireLockSyncWithRetry(path);
++				try {
++					release = this.acquireLockSyncWithRetry(path);
++				} catch (error) {
++					const code =
++						typeof error === "object" && error !== null && "code" in error
++							? String((error as { code?: unknown }).code)
++							: undefined;
++					if (code !== "EROFS" && code !== "EACCES") throw error;
++					// Immutable project settings remain readable without creating a
++					// sibling lock. A callback requesting a write must still fail.
++					readOnlyLockError = error;
++				}
+ 			}
+ 			const current = fileExists ? readFileSync(path, "utf-8") : undefined;
+ 			const next = fn(current);
+ 			if (next !== undefined) {
++				if (readOnlyLockError) throw readOnlyLockError;
+ 				// Only create directory when we actually need to write
+ 				if (!existsSync(dir)) {
+ 					mkdirSync(dir, { recursive: true });
+diff --git a/packages/coding-agent/test/settings-readonly.test.ts b/packages/coding-agent/test/settings-readonly.test.ts
+new file mode 100644
+index 000000000..89436fab1
+--- /dev/null
++++ b/packages/coding-agent/test/settings-readonly.test.ts
+@@ -0,0 +1,97 @@
++import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import lockfile from "proper-lockfile";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { FileSettingsStorage, SettingsManager } from "../src/core/settings-manager.ts";
++
++describe("immutable project settings", () => {
++	let root: string;
++	let path: string;
++	let storage: FileSettingsStorage;
++	beforeEach(() => {
++		root = mkdtempSync(join(tmpdir(), "pi-settings-readonly-"));
++		mkdirSync(join(root, ".pi"));
++		path = join(root, ".pi/settings.json");
++		writeFileSync(path, JSON.stringify({ extensions: ["./guard.ts"], skills: ["./doctrine"] }));
++		storage = new FileSettingsStorage(root, join(root, "agent"));
++	});
++	afterEach(() => {
++		vi.restoreAllMocks();
++		rmSync(root, { recursive: true, force: true });
++	});
++
++	for (const code of ["EROFS", "EACCES"]) {
++		it(`loads existing profile after ${code} without creating a lock`, () => {
++			const error = Object.assign(new Error("fixture read-only lock refusal"), { code });
++			const lock = vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
++				throw error;
++			});
++			const before = readFileSync(path, "utf8");
++			const manager = SettingsManager.create(root, join(root, "agent"));
++			expect(manager.getExtensionPaths()).toEqual(["./guard.ts"]);
++			expect(manager.getSkillPaths()).toEqual(["./doctrine"]);
++			expect(manager.drainErrors()).toEqual([]);
++			expect(lock).toHaveBeenCalledTimes(1);
++			expect(existsSync(`${path}.lock`)).toBe(false);
++			expect(readFileSync(path, "utf8")).toBe(before);
++		});
++
++		it(`rejects every write intent after ${code}, including identical bytes`, () => {
++			const error = Object.assign(new Error("fixture read-only lock refusal"), { code });
++			vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
++				throw error;
++			});
++			const before = readFileSync(path, "utf8");
++			for (const next of [before, "{}", ""]) {
++				const callback = vi.fn(() => next);
++				expect(() => storage.withLock("project", callback)).toThrow(error);
++				expect(callback).toHaveBeenCalledTimes(1);
++				expect(readFileSync(path, "utf8")).toBe(before);
++				expect(existsSync(`${path}.lock`)).toBe(false);
++			}
++		});
++	}
++
++	it("preserves normal writable read/write locking and release", () => {
++		const callback = vi.fn((current: string | undefined) => {
++			expect(current).toBe(readFileSync(path, "utf8"));
++			expect(existsSync(`${path}.lock`)).toBe(true);
++			return "{}";
++		});
++		storage.withLock("project", callback);
++		expect(callback).toHaveBeenCalledTimes(1);
++		expect(readFileSync(path, "utf8")).toBe("{}");
++		expect(existsSync(`${path}.lock`)).toBe(false);
++	});
++
++	it("retains contention retries and never invokes a callback without its lock", () => {
++		const error = Object.assign(new Error("fixture active writer"), { code: "ELOCKED" });
++		const lock = vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
++			throw error;
++		});
++		const callback = vi.fn(() => undefined);
++		expect(() => storage.withLock("project", callback)).toThrow(error);
++		expect(lock).toHaveBeenCalledTimes(10);
++		expect(callback).not.toHaveBeenCalled();
++	});
++
++	it("propagates unrelated lock failures and read-only callback failures", () => {
++		const callback = vi.fn(() => undefined);
++		const other = Object.assign(new Error("fixture I/O error"), { code: "EIO" });
++		const lock = vi.spyOn(lockfile, "lockSync").mockImplementation(() => {
++			throw other;
++		});
++		expect(() => storage.withLock("project", callback)).toThrow(other);
++		expect(callback).not.toHaveBeenCalled();
++		lock.mockImplementation(() => {
++			throw Object.assign(new Error("readonly"), { code: "EROFS" });
++		});
++		const parse = new Error("fixture parse failure");
++		expect(() =>
++			storage.withLock("project", () => {
++				throw parse;
++			}),
++		).toThrow(parse);
++	});
++});

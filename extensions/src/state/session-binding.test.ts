@@ -123,6 +123,20 @@ test("delegates reject corrupt parent outcomes, hard caps and bound pause contro
 	}
 });
 
+test("delegates inherit the external trusted kill path and refuse an active stop", () => {
+	const f = fixture();
+	try {
+		f.env.PLUTO_KILL_FILE = join(f.cwd, "trusted-control", "KILL_SWITCH");
+		bindSession(f.options);
+		const child = buildSubAgentEnv(f.cwd, f.env);
+		assert.equal(child.PLUTO_KILL_FILE, f.env.PLUTO_KILL_FILE);
+		mkdirSync(join(f.cwd, "trusted-control"));
+		writeFileSync(f.env.PLUTO_KILL_FILE, "operator stop");
+		assert.throws(() => getActiveBinding(f.cwd, child), /parent control stop/);
+		assert.throws(() => buildSubAgentEnv(f.cwd, f.env), /parent control stop/);
+	} finally { f.cleanup(); }
+});
+
 test("a specialist's own policy hold blocks direct nested spawn while transient errors remain distinct", () => {
 	const f = fixture();
 	try {

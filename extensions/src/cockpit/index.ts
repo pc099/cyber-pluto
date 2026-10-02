@@ -18,7 +18,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -33,9 +33,10 @@ import { isJunkEvidence, junkEvidenceReason } from "../shared/evidence-integrity
 import { IllegalStatusTransition } from "../state/findings-repo.js";
 import type { FindingRow, NodeRow } from "../state/types.js";
 import { buildFindingReport } from "./report.js";
+import { killSwitchPath } from "../red-lines/kill-switch.js";
+import { requestOperatorStop } from "../state/signer-health.js";
 
 const REPORTS_DIR = "reports";
-const KILL_FILE = "state/KILL_SWITCH";
 // The pause flag is per-engagement (lifecycle writes it to the state dir); the
 // kill switch stays global at repo-root state/.
 function pausePath(cwd: string): string {
@@ -303,8 +304,15 @@ async function doResume(ctx: ExtensionCommandContext): Promise<void> {
 async function doKill(ctx: ExtensionCommandContext): Promise<void> {
 	const ok = await ctx.ui.confirm("Kill switch", "Halt the engagement now? The next tool call is blocked and the harness stops.");
 	if (!ok) return void ctx.ui.notify("Kill switch not engaged.", "info");
-	await mkdir(join(ctx.cwd, "state"), { recursive: true });
-	await writeFile(join(ctx.cwd, KILL_FILE), `engaged by operator ${new Date().toISOString()}\n`, "utf8");
+	if (process.env.PLUTO_SANDBOX_MODE === "requested") {
+		const socket = process.env.PLUTO_PROMOTION_SIGNER_SOCK;
+		if (!socket) throw new Error("Sandbox operator stop has no configured signing/control endpoint");
+		await requestOperatorStop(socket);
+	} else {
+		const path = killSwitchPath(ctx.cwd);
+		await mkdir(dirname(path), { recursive: true });
+		await writeFile(path, `engaged by operator ${new Date().toISOString()}\n`, "utf8");
+	}
 	ctx.ui.notify("KILL SWITCH ENGAGED — the harness halts at the next tool call.", "warning");
 }
 

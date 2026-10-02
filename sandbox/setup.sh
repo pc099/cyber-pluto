@@ -1,87 +1,65 @@
 #!/usr/bin/env bash
-#
-# setup.sh — one-time operator setup for the sandboxed harness (board v0).
-#
-# Prepares the host so `cyberpluto --sandbox` can run the agent as the confined
-# `pluto` uid against a frozen, read-only harness tree. Run as root, once.
-#
-#   sudo sandbox/setup.sh [/opt/cyber-pluto]
-#
-# It: (1) creates the dedicated unprivileged `pluto` uid, (2) deploys the harness
-# to a pluto-TRAVERSABLE path (NOT under /root, which is 0700 and blocks pluto
-# from reading the tree at all) via a bind mount, (3) freezes the tree
-# root-owned + world-read-only so the agent cannot modify the harness/gate, and
-# (4) makes the engagements/ workspace pluto-writable.
+# Explicit offline deployment; never binds or freezes the development checkout.
+# Usage: sudo sandbox/setup.sh [ABSENT-RUNTIME-PATH]
 set -euo pipefail
-[[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 1; }
-
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEPLOY="${1:-/opt/cyber-pluto}"
-UIDNAME="${PLUTO_UID:-pluto}"
-
-echo "[*] dedicated unprivileged uid '$UIDNAME'"
-id "$UIDNAME" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$UIDNAME"
-
-echo "[*] deploy harness to a pluto-traversable path: $DEPLOY (bind of $SRC)"
-mkdir -p "$DEPLOY"; chmod 755 "$(dirname "$DEPLOY")" "$DEPLOY"
-mountpoint -q "$DEPLOY" || mount --bind "$SRC" "$DEPLOY"
-
-echo "[*] freeze the harness tree read-only to the agent (root-owned, o-w stripped)"
-# NB: leaves the engagements/ workspace writable to pluto below. Build artifacts
-# (extensions/dist, the Pi bundle) MUST be built by root BEFORE this step — the
-# agent runs a frozen tree and cannot build.
-chown -R root:root "$DEPLOY"
-chmod -R o-w,g-w "$DEPLOY"
-find "$DEPLOY" -type d -exec chmod o+rx,g+rx {} +   # pluto can read + traverse
-
-echo "[*] pluto-writable workspace: $DEPLOY/engagements"
-mkdir -p "$DEPLOY/engagements"; chown "$UIDNAME":"$UIDNAME" "$DEPLOY/engagements"; chmod 0770 "$DEPLOY/engagements"
-
-echo "[*] Gate-1 promotion signing keypair (Item 0)"
-# The PRIVATE key lives OUTSIDE the pluto-readable tree and is root-only (0400),
-# so the confined agent can never read it — it can only ask the root signing
-# daemon (started by the launcher) to sign, over a unix socket. The PUBLIC key is
-# world-readable so consumers can verify. Verified on the box: pluto gets
-# "Permission denied" on the private key but CAN sign through the socket under
-# no_new_privs (sudo is unavailable there — setuid is disabled).
-KEYDIR="${PLUTO_KEYDIR:-/etc/cyber-pluto}"
-PRIV="$KEYDIR/promotion_ed25519.key"
-PUB="$KEYDIR/promotion_ed25519.pub"
-mkdir -p "$KEYDIR"; chmod 0755 "$KEYDIR"   # traversable, but the key itself is 0400
-if [[ -f "$PRIV" ]]; then
-	echo "    keypair already present at $PRIV (leaving it; delete to rotate)"
-else
-	command -v openssl >/dev/null || { echo "openssl not found; cannot generate the signing key" >&2; exit 1; }
-	openssl genpkey -algorithm ed25519 -out "$PRIV"
-	openssl pkey -in "$PRIV" -pubout -out "$PUB"
-	chown root:root "$PRIV" "$PUB"; chmod 0400 "$PRIV"; chmod 0444 "$PUB"
-	echo "    private (root-only 0400): $PRIV"
-	echo "    public  (world-read 0444): $PUB"
-fi
-# The launcher reads the private key from PROMOTION_PRIVKEY_DEFAULT
-# (/etc/cyber-pluto/promotion_ed25519.key) unless PLUTO_PROMOTION_PRIVKEY is set.
-[[ "$PRIV" == "/etc/cyber-pluto/promotion_ed25519.key" ]] || \
-	echo "    NOTE: non-default key path — export PLUTO_PROMOTION_PRIVKEY=$PRIV when launching."
-
-echo
-echo "  ✅ setup complete."
-echo "  Run a sandboxed engagement (as root — it drops to $UIDNAME):"
-echo "     cd $DEPLOY && ./cyberpluto <target> --sandbox --headless"
-echo "  The kill switch stays root-owned: touch $DEPLOY/state/KILL_SWITCH to halt."
-echo "  Rebuild after a code change: (as root) cd $DEPLOY/extensions && npm run build,"
-echo "  then re-run this script to re-freeze."
-
-echo "[*] SecLists web-content wordlists (Decision 0006 — real content discovery)"
-SLDIR=/usr/share/seclists/Discovery/Web-Content
-mkdir -p "$SLDIR"
-for w in raft-large-directories.txt raft-large-files.txt; do
-  [ -s "$SLDIR/$w" ] || curl -fsSL "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/$w" -o "$SLDIR/$w" && echo "    $w ready" || echo "    WARN: could not fetch $w"
+fail() { echo "setup refused: $*" >&2; exit 1; }
+[[ $EUID -eq 0 ]] || fail "root required"
+# Launcher and resume descriptors use these canonical resources. Refuse stale
+# overrides before creating directories, identities, keys or deployment stages.
+for setting in PLUTO_UID PLUTO_RUN_DIR PLUTO_CONTROL_DIR PLUTO_ENGAGEMENTS_DIR PLUTO_KEYDIR; do
+ case "$setting" in
+  PLUTO_UID) expected=pluto ;;
+  PLUTO_RUN_DIR) expected=/run/cyber-pluto ;;
+  PLUTO_CONTROL_DIR) expected=/var/lib/cyber-pluto/control ;;
+  PLUTO_ENGAGEMENTS_DIR) expected=/var/lib/cyber-pluto/engagements ;;
+  PLUTO_KEYDIR) expected=/etc/cyber-pluto ;;
+ esac
+ [[ ! -v "$setting" || "${!setting}" == "$expected" ]] || fail "$setting must be $expected for the canonical launcher"
 done
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+DEPLOY="${1:-/opt/cyber-pluto}"
+UIDNAME=pluto
+for program in node bwrap setpriv flock openssl; do command -v "$program" >/dev/null || fail "missing prerequisite: $program (install separately)"; done
+[[ -f "$SRC/extensions/dist/launcher/deploy.js" ]] || fail "build extensions before deployment"
+[[ ! -e "$DEPLOY" && ! -L "$DEPLOY" ]] || fail "destination exists; select an absent versioned runtime path"
 
-echo "[*] Privilege-escalation + cracking toolset (Decision 0006 autonomy follow-on)"
-mkdir -p /opt/privesc /usr/share/wordlists
-[ -s /opt/privesc/linpeas.sh ] || curl -fsSL "https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh" -o /opt/privesc/linpeas.sh && chmod +x /opt/privesc/linpeas.sh
-[ -s /opt/privesc/pspy64 ]     || curl -fsSL "https://github.com/DominicBreuker/pspy/releases/latest/download/pspy64" -o /opt/privesc/pspy64 && chmod +x /opt/privesc/pspy64
-[ -s /opt/privesc/lse.sh ]     || curl -fsSL "https://raw.githubusercontent.com/diego-treitos/linux-smart-enumeration/master/lse.sh" -o /opt/privesc/lse.sh && chmod +x /opt/privesc/lse.sh
-[ -s /usr/share/wordlists/rockyou.txt ] || curl -fsSL "https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt" -o /usr/share/wordlists/rockyou.txt
-echo "    privesc toolset ready (linpeas/pspy/lse + rockyou)"
+root_dir() {
+ local path="$1" parent mode
+ [[ "$path" == /* && "$path" != /root && "$path" != /root/* ]] || fail "root resource path must be absolute and outside /root"
+ parent="$(dirname "$path")"
+ if [[ "$path" != / ]]; then root_dir "$parent"; fi
+ [[ ! -L "$path" ]] || fail "symlink directory: $path"
+ mkdir -p -m 0755 -- "$path"
+ [[ "$(realpath -e "$path")" == "$path" && "$(stat -c %u "$path")" == 0 ]] || fail "unsafe root directory: $path"
+ mode="$(stat -c %a "$path")"
+ (( (8#$mode & 0022) == 0 )) || fail "writable root directory: $path"
+ (( (8#$mode & 0055) == 0055 )) || fail "root directory not traversable: $path"
+}
+RUN_DIR=/run/cyber-pluto
+CONTROL_DIR=/var/lib/cyber-pluto/control
+ENGAGEMENTS_DIR=/var/lib/cyber-pluto/engagements
+KEYDIR=/etc/cyber-pluto
+root_dir "$RUN_DIR"; root_dir "$RUN_DIR/signers"; root_dir "$CONTROL_DIR"; root_dir "$ENGAGEMENTS_DIR"; root_dir "$KEYDIR"
+[[ ! -L "$RUN_DIR/setup.lock" ]] || fail "symlink setup lock"
+exec 9>"$RUN_DIR/setup.lock"; flock -n 9 || fail "another setup is active"
+id "$UIDNAME" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$UIDNAME"
+[[ "$(id -u "$UIDNAME")" != 0 ]] || fail "agent uid must be unprivileged"
+
+PRIV="$KEYDIR/promotion_ed25519.key"; PUB="$KEYDIR/promotion_ed25519.pub"
+if [[ ! -e "$PRIV" && ! -L "$PRIV" && ! -e "$PUB" && ! -L "$PUB" ]]; then
+ KEY_STAGE="$(mktemp -d "$KEYDIR/.keypair.XXXXXXXX")"
+ trap 'rm -f -- "$KEY_STAGE/private.key" "$KEY_STAGE/public.pub"; rmdir "$KEY_STAGE"' EXIT
+ openssl genpkey -algorithm ed25519 -out "$KEY_STAGE/private.key"
+ openssl pkey -in "$KEY_STAGE/private.key" -pubout -out "$KEY_STAGE/public.pub"
+ chmod 0400 "$KEY_STAGE/private.key"; chmod 0444 "$KEY_STAGE/public.pub"
+ mv "$KEY_STAGE/private.key" "$PRIV"; mv "$KEY_STAGE/public.pub" "$PUB"
+ rmdir "$KEY_STAGE"; trap - EXIT
+fi
+[[ -f "$PRIV" && ! -L "$PRIV" && -f "$PUB" && ! -L "$PUB" ]] || fail "incomplete or symlink keypair; repair explicitly"
+[[ "$(stat -c '%u:%a' "$PRIV")" == 0:400 && "$(stat -c '%u:%a' "$PUB")" == 0:444 ]] || fail "keypair ownership/modes must be root:0400 and root:0444"
+openssl pkey -in "$PRIV" -pubout | cmp -s - "$PUB" || fail "keypair mismatch"
+
+node "$SRC/extensions/dist/launcher/deploy.js" "$SRC" "$DEPLOY"
+echo "Runtime deployed: $DEPLOY"
+echo "Workspace base: $ENGAGEMENTS_DIR; operator control: $CONTROL_DIR/KILL_SWITCH"
+echo "Run the no-model sandbox readiness check before any target engagement."

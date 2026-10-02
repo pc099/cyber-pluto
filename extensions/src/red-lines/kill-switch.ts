@@ -19,8 +19,8 @@ import { join } from "node:path";
 
 const DEFAULT_KILL_FILE = "state/KILL_SWITCH";
 
-export function killSwitchPath(cwd: string): string {
-	const override = process.env["PLUTO_KILL_FILE"];
+export function killSwitchPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+	const override = env["PLUTO_KILL_FILE"];
 	if (override && override.length > 0) {
 		return override;
 	}
